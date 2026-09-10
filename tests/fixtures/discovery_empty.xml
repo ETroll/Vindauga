@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TenantFeedURLs UserIdType="OrgId" ClassicResources="false" ARMResources="true"
+    xmlns="http://schemas.microsoft.com/ts/2014/03/tswfdiscovery">
+</TenantFeedURLs>

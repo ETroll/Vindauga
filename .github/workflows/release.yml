@@ -1,0 +1,139 @@
+name: Release
+
+# Triggered by a v* tag (e.g. v1.0.0). Builds the Arch package (packaging/arch/PKGBUILD)
+# and the Ubuntu .deb (packaging/deb/build-deb.sh) and publishes both to a GitHub Release.
+#
+# The .deb bundles its own Qt: apt's Qt on Ubuntu 24.04 is 6.4, older than the minimum
+# this project requires, and bundling keeps the package working regardless of which Qt
+# (if any) is installed on the target system. See build-deb.sh for what is bundled and why.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  arch-package:
+    name: Build + publish Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      # github-cli: the archlinux:latest CONTAINER replaces the whole runner toolchain,
+      # including the gh preinstalled on the ubuntu-latest HOST, so gh must be installed
+      # explicitly here.
+      - name: Install build tools
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git sudo github-cli
+      - uses: actions/checkout@v4
+
+      # The container runs this job as root, but the actions/checkout extraction is owned
+      # by a different UID, which trips git's safe.directory check ("detected dubious
+      # ownership in repository"). Only affects git run as root (git archive below); the
+      # builder user created further down runs no git commands itself.
+      - name: Trust checkout directory (container UID mismatch, see comment above)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Build the source tarball from the already checked-out tree and place it where
+      # PKGBUILD's `source=()` expects it, so makepkg uses the local file instead of
+      # downloading the tag tarball; the package is built from exactly this commit.
+      # The "Vindauga-$pkgver" prefix matches how GitHub itself names the tag tarball.
+      - name: Build local source tarball (see comment above)
+        run: |
+          pkgver="${GITHUB_REF_NAME#v}"
+          git archive --prefix="Vindauga-$pkgver/" \
+            -o "packaging/arch/vindauga-$pkgver.tar.gz" HEAD
+
+      # makepkg refuses to run as root (deliberate Arch safety restriction) and needs a
+      # non-root user with passwordless sudo (makepkg -s uses sudo pacman internally to
+      # install missing build dependencies).
+      - name: Create non-root build user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      # QT_QPA_PLATFORM=offscreen: the container has no X11/Wayland display, and without a
+      # loadable QPA platform plugin QGuiApplication aborts via qFatal() in check(). Tests
+      # that do not set this themselves inherit ctest's ambient environment, so it is set
+      # directly on the makepkg call, as in the Arch job in ci.yml.
+      - name: Build package
+        working-directory: packaging/arch
+        run: |
+          sudo -u builder \
+            env QT_QPA_PLATFORM=offscreen QTWEBENGINE_DISABLE_SANDBOX=1 \
+            makepkg -s --noconfirm
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vindauga-arch-package
+          path: packaging/arch/*.pkg.tar.zst
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" packaging/arch/*.pkg.tar.zst \
+            --title "${{ github.ref_name }}" --generate-notes --repo "${{ github.repository }}" \
+            || gh release upload "${{ github.ref_name }}" packaging/arch/*.pkg.tar.zst \
+              --repo "${{ github.repository }}" --clobber
+
+  deb-package:
+    name: Build + publish .deb package (Ubuntu 24.04, bundled Qt)
+    # Runs DIRECTLY on the ubuntu-24.04 host, not in a container (unlike arch-package
+    # above): dpkg-shlibdeps, which generates the correct Depends: list for the system libs
+    # QtWebEngine/Chromium pulls in (see build-deb.sh), must run on a real Ubuntu 24.04
+    # system to resolve the right apt package names. A container would be the same
+    # distro/version anyway, so there is no reason for one.
+    runs-on: ubuntu-24.04
+    env:
+      QT_VERSION: "6.11.2"
+    steps:
+      - uses: actions/checkout@v4
+      # libsecret-1-dev: qtkeychain's libsecret backend (LIBSECRET_SUPPORT=ON in
+      # build-deb.sh) requires it via pkg-config.
+      # libxkbcommon-dev: find_package(Qt6 ... GuiPrivate) requires libxkbcommon (Qt's
+      # FindXKB.cmake), unlike plain Qt6::Gui.
+      # libxcb-*/libxkbcommon-x11-0 runtime libs: dpkg-shlibdeps resolves package names via
+      # dpkg's database on the BUILD machine, so the xcb runtime libs needed by Qt's bundled
+      # X11 platform plugin must be INSTALLED on the runner for the correct Depends: entries
+      # to be generated; otherwise it fails with "cannot find library libxcb-cursor.so.0
+      # needed by opt/vindauga/plugins/platforms/libqxcb.so".
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config freerdp3-dev libgl1-mesa-dev dpkg-dev \
+            libsecret-1-dev libxkbcommon-dev libxcb1-dev \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-shape0 libxcb-util1 libxcb-xkb1 libxkbcommon-x11-0
+      - name: Install Qt via aqtinstall (same modules/version as ci.yml)
+        run: |
+          pip install --user aqtinstall
+          # qtshadertools: separate add-on module, needed for qt6_add_shaders()/qsb
+          # (compiled shaders in the RDP render node); see the matching comment in ci.yml.
+          python3 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
+            -m qtnetworkauth qtwebengine qtwebchannel qtpositioning qtshadertools \
+            -O "${{ github.workspace }}/qt"
+      - name: Build .deb (packaging/deb/build-deb.sh)
+        run: |
+          pkgver="${GITHUB_REF_NAME#v}"
+          bash packaging/deb/build-deb.sh "${{ github.workspace }}/qt/$QT_VERSION/gcc_64" "$pkgver"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vindauga-deb-package
+          path: packaging/deb/*.deb
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" packaging/deb/*.deb \
+            --title "${{ github.ref_name }}" --generate-notes --repo "${{ github.repository }}" \
+            || gh release upload "${{ github.ref_name }}" packaging/deb/*.deb \
+              --repo "${{ github.repository }}" --clobber

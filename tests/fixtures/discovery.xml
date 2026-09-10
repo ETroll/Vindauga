@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TenantFeedURLs UserIdType="OrgId" ClassicResources="false" ARMResources="true"
+    xmlns="http://schemas.microsoft.com/ts/2014/03/tswfdiscovery">
+  <TenantFeedURL
+      TenantId="11111111-1111-1111-1111-111111111111"
+      TenantDisplayName="REVD Workspace"
+      WorkspaceName="REVD Workspace"
+      ConsentStatus="Accepted"
+      Geo="EU"
+      HubDiscoveryURL="https://rdweb-g-eu-r1.wvd.microsoft.com/api/arm/hubdiscovery?resourceId=11111111-1111-1111-1111-111111111111"
+      DiagnosticServiceURL="https://rdweb-g-eu-r1.wvd.microsoft.com/api/arm/DiagnosticEvents/v1"
+      FeedURL="https://www.wvd.microsoft.com/api/arm/feeddiscovery/tenants/11111111-1111-1111-1111-111111111111/webfeed?geo=EU&amp;showInFeedMonikers=CloudPC&amp;showInFeedMonikers=CloudPCReserve"
+      ArmPath="/subscriptions/sub-1/resourcegroups/rg-1/providers/Microsoft.DesktopVirtualization/workspaces/ws-1"
+      ConditionalAccessClaims="" />
+  <TenantFeedURL
+      TenantId="22222222-2222-2222-2222-222222222222"
+      TenantDisplayName="Second Tenant"
+      WorkspaceName="Second Tenant"
+      ConsentStatus="Accepted"
+      Geo="EU"
+      FeedURL="https://www.wvd.microsoft.com/api/arm/feeddiscovery/tenants/22222222-2222-2222-2222-222222222222/webfeed?geo=EU"
+      ArmPath="/subscriptions/sub-2/resourcegroups/rg-2/providers/Microsoft.DesktopVirtualization/workspaces/ws-2"
+      ConditionalAccessClaims="claims-challenge-token" />
+</TenantFeedURLs>

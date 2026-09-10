@@ -1,0 +1,58 @@
+# Maintainer: Karl Løland <karl@folia.no>
+#
+# `source=()` points at the GitHub tag tarball. The release workflow
+# (.github/workflows/release.yml) instead generates a tarball with EXACTLY the same name as
+# the `source()` entry ($pkgname-$pkgver.tar.gz) in this directory before running makepkg,
+# so that makepkg uses the local file and skips the network download entirely; the package
+# is then built from the checked-out tagged commit. To build it by hand:
+#   git archive --prefix="Vindauga-$pkgver/" -o "vindauga-$pkgver.tar.gz" "v$pkgver"
+# `sha256sums=('SKIP')` is deliberate for the same reason: the tarball is generated
+# locally, so there is no fixed upstream checksum to pin.
+pkgname=vindauga
+pkgver=1.2.5
+pkgrel=1
+pkgdesc="Native Linux client for Azure Virtual Desktop / Windows 365"
+arch=('x86_64')
+url="https://github.com/ETroll/Vindauga"
+license=('MIT')
+depends=(
+    'qt6-base'
+    'qt6-declarative'
+    'qt6-networkauth'
+    'qt6-webengine'
+    'qtkeychain-qt6'
+    'freerdp'
+    # Linked directly (X11 keymap handling), not only via qt6-base, so listed explicitly
+    # per Arch convention even though both also come in transitively.
+    'libxkbcommon'
+    'libxcb'
+)
+makedepends=(
+    'cmake'
+    'ninja'
+    # Needed for the compiled QRhi shaders (qt6_add_shaders/qsb). Build-time only, since
+    # the shaders are embedded in the binary, and NOT pulled in transitively by
+    # qt6-base/qt6-declarative.
+    'qt6-shadertools'
+)
+# The GitHub tag tarball extracts to "Vindauga-$pkgver" (capital V, matching the repository
+# name rather than $pkgname), hence _srcdir instead of an assumed "$pkgname-$pkgver".
+_srcdir="Vindauga-$pkgver"
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cmake -B build -S "$_srcdir" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DVINDAUGA_WITH_RDP=ON
+    cmake --build build
+}
+
+check() {
+    ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}

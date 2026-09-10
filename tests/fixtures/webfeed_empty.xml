@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceCollection SchemaVersion="2.1" xmlns="http://schemas.microsoft.com/ts/2007/05/tswf">
+  <Publisher Name="REVD Workspace" ID="11111111-1111-1111-1111-111111111111" SupportsReconnect="false">
+    <Resources>
+    </Resources>
+    <TerminalServers>
+    </TerminalServers>
+  </Publisher>
+</ResourceCollection>

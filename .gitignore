@@ -1,0 +1,25 @@
+# Build trees
+build/
+build-release/
+*.o
+*.so
+CMakeCache.txt
+CMakeFiles/
+*.user
+
+# Machine-specific CMake presets (e.g. a local Qt path)
+CMakeUserPresets.json
+
+# Package build artifacts (makepkg, build-deb.sh)
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/*.tar.gz
+packaging/arch/*.tar.zst
+packaging/arch/*.log
+packaging/deb/*.deb
+
+# Internal working notes and traffic captures (may contain tokens or PII)
+internaldocs/
+*.mitm
+*.har
+*.log

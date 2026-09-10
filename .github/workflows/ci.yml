@@ -1,0 +1,97 @@
+name: CI
+
+# Build + test on every push/PR against master, on both distributions the project targets.
+# This is NOT a packaging/release job; see release.yml for that.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-arch:
+    name: Build + test (Arch Linux)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      # qt6-shadertools: the compiled QRhi shaders (qt6_add_shaders/qsb) are NOT pulled in
+      # transitively by qt6-base/qt6-declarative, so find_package(Qt6 ... ShaderTools)
+      # would fail without it.
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel cmake ninja git sudo \
+            qt6-base qt6-declarative qt6-networkauth qt6-webengine qt6-shadertools qtkeychain-qt6 freerdp
+      - uses: actions/checkout@v4
+
+      # QtWebEngine refuses to start its Chromium sandbox as root ("Running as root without
+      # --no-sandbox is not supported"), and the archlinux:latest container runs as root by
+      # default. Same non-root-user pattern as the makepkg job in release.yml.
+      - name: Create non-root build user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      # QT_QPA_PLATFORM=offscreen: the container has no X11/Wayland display.
+      # QTWEBENGINE_DISABLE_SANDBOX=1: extra safety net beyond the non-root user, since CI
+      # containers may lack the capabilities/seccomp support Chromium's sandbox requires
+      # even as non-root.
+      - name: Configure, build, test
+        run: |
+          sudo -u builder --preserve-env=GITHUB_WORKSPACE \
+            env HOME=/home/builder QT_QPA_PLATFORM=offscreen QTWEBENGINE_DISABLE_SANDBOX=1 \
+            bash -c 'cd "$GITHUB_WORKSPACE" && cmake --preset debug && cmake --build --preset debug && ctest --preset debug'
+
+  build-ubuntu:
+    name: Build + test (Ubuntu 24.04, Qt via aqtinstall)
+    runs-on: ubuntu-24.04
+    env:
+      # apt's Qt on 24.04 is 6.4, which lacks PKCE S256 in QtNetworkAuth and
+      # QOAuth2DeviceAuthorizationFlow (Qt 6.9+), so Qt is installed via aqtinstall.
+      # NB: LD_LIBRARY_PATH below cannot reference ${{ env.QT_VERSION }} (GitHub Actions
+      # env context cannot reference other keys in the same env block), so "6.11.2" is
+      # hardcoded there too. Keep the two in sync when bumping the version.
+      QT_VERSION: "6.11.2"
+      # The runner has no X11/Wayland display. GitHub-hosted Ubuntu runners already run as
+      # a non-root "runner" user, so the root/sandbox issue from the Arch job does not
+      # apply here, but the offscreen platform is still required.
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_DISABLE_SANDBOX: 1
+      # CMAKE_PREFIX_PATH below only affects BUILD-time linking. At TEST time the dynamic
+      # linker would otherwise fall back to a system libQt6DBus.so.6 (installed
+      # transitively via qtkeychain-qt6-dev) instead of the aqt Qt, and the private-API ABI
+      # mismatch fails with "undefined symbol: _ZN14QObjectPrivateC2Ei, version
+      # Qt_6_PRIVATE_API" in the one test that loads Qt6DBus (via WebEngine).
+      LD_LIBRARY_PATH: ${{ github.workspace }}/qt/6.11.2/gcc_64/lib
+    steps:
+      - uses: actions/checkout@v4
+      # libxkbcommon-dev: find_package(Qt6 ... GuiPrivate) requires libxkbcommon (Qt's
+      # FindXKB.cmake), unlike plain Qt6::Gui.
+      - name: Install system dependencies (freerdp3/qtkeychain are recent enough via apt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config \
+            freerdp3-dev qtkeychain-qt6-dev libgl1-mesa-dev libxkbcommon-dev libxcb1-dev
+          # libgl1-mesa-dev: Qt6Gui's (and thus Qt6Quick's) CMake configuration requires
+          # OpenGL even though desktop GL is not used directly. Without it,
+          # find_package(Qt6 ... Quick) fails with "WrapOpenGL could not be found".
+      - name: Install Qt via aqtinstall
+        run: |
+          pip install --user aqtinstall
+          # The arch argument must be given as "linux_gcc_64" (plain "gcc_64" fails with
+          # "packages ... not found while parsing XML" for this Qt version), but the
+          # INSTALL PATH is still "gcc_64" without the prefix, which is what
+          # CMAKE_PREFIX_PATH below uses.
+          # qtwebchannel/qtpositioning: required by Qt6WebEngineCore/Quick's own CMake
+          # config ("Qt6WebEngineCore could not be found because dependency Qt6WebChannel
+          # could not be found"). qtshadertools: separate add-on module, needed for
+          # qt6_add_shaders()/qsb (compiled shaders in the RDP render node).
+          python3 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
+            -m qtnetworkauth qtwebengine qtwebchannel qtpositioning qtshadertools \
+            -O "${{ github.workspace }}/qt"
+      - name: Configure
+        run: cmake --preset debug -DCMAKE_PREFIX_PATH="${{ github.workspace }}/qt/${{ env.QT_VERSION }}/gcc_64"
+      - name: Build
+        run: cmake --build --preset debug
+      - name: Test
+        run: ctest --preset debug

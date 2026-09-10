@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceCollection SchemaVersion="2.1" xmlns="http://schemas.microsoft.com/ts/2007/05/tswf">
+  <Publisher Name="REVD Workspace" ID="11111111-1111-1111-1111-111111111111" SupportsReconnect="false">
+    <Resources>
+      <Resource ID="res-hostpool04"
+          ArmPath="/subscriptions/sub-1/resourcegroups/rg-1/providers/Microsoft.DesktopVirtualization/applicationgroups/dag-1/applications/SessionDesktop"
+          Title="hostpool04" Type="Desktop" ShowByDefault="true" DeviceState="Available">
+        <Icons>
+          <IconRaw FileType="Ico" FileURL="https://www.wvd.microsoft.com/api/arm/feeddiscovery/tenants/11111111-1111-1111-1111-111111111111/icons/res-hostpool04.ico?geo=EU&amp;showInFeedMonikers=CloudPC" />
+          <Icon32 Dimensions="32x32" FileType="Png" FileURL="https://www.wvd.microsoft.com/api/arm/feeddiscovery/tenants/11111111-1111-1111-1111-111111111111/pngs/res-hostpool04_32_0.png?geo=EU" />
+        </Icons>
+        <HostingTerminalServers>
+          <HostingTerminalServer>
+            <ResourceFile FileExtension=".rdp"
+                URL="https://www.wvd.microsoft.com/api/arm/feeddiscovery/tenants/11111111-1111-1111-1111-111111111111/rdps/res-hostpool04.rdp?hash=abc123&amp;geo=EU&amp;showInFeedMonikers=CloudPC&amp;endpointId=ep-1"
+                ETag="abc123" />
+            <TerminalServerRef Ref="ts-1" />
+          </HostingTerminalServer>
+        </HostingTerminalServers>
+      </Resource>
+      <Resource ID="res-remoteapp01"
+          ArmPath="/subscriptions/sub-1/resourcegroups/rg-1/providers/Microsoft.DesktopVirtualization/applicationgroups/dag-2/applications/Notepad"
+          Title="Notepad" Type="RemoteApp" ShowByDefault="true" DeviceState="Unavailable">
+        <HostingTerminalServers>
+          <HostingTerminalServer>
+            <TerminalServerRef Ref="ts-1" />
+          </HostingTerminalServer>
+        </HostingTerminalServers>
+      </Resource>
+    </Resources>
+    <TerminalServers>
+      <TerminalServer ID="ts-1" Name="ts-1" />
+    </TerminalServers>
+  </Publisher>
+</ResourceCollection>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Vindauga
+Comment=Native Azure Virtual Desktop / Windows 365 client
+Exec=vindauga
+Icon=vindauga
+Terminal=false
+Categories=Network;RemoteAccess;
