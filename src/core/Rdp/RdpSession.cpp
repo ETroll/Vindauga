@@ -184,8 +184,8 @@ BOOL vindaugaAuthenticateEx(freerdp* instance, char** username, char** password,
     // (arm.c sets Domain to "AzureAD" if null before the AUTH_RDSTLS call). Only fill in
     // empty strings where the input is actually null; keep existing values otherwise.
     qCDebug(lcRdp) << "AuthenticateEx called, reason=" << static_cast<int>(reason)
-                    << "username(in)=" << (*username ? *username : "(null)")
-                    << "domain(in)=" << (*domain ? *domain : "(null)");
+                    << "username(in) set=" << (*username != nullptr)
+                    << "domain(in) set=" << (*domain != nullptr);
 
     // Neither an empty password nor the AAD access token used as password is accepted
     // for RDSTLS by an Entra-joined gateway. Without a WAM broker this client cannot do

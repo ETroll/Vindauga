@@ -18,8 +18,10 @@ packaging/arch/*.tar.zst
 packaging/arch/*.log
 packaging/deb/*.deb
 
-# Internal working notes and traffic captures (may contain tokens or PII)
+# Internal working notes, traffic captures and real .rdp files (may contain tokens or PII)
 internaldocs/
 *.mitm
 *.har
 *.log
+*.rdp
+!tests/fixtures/sample.rdp
