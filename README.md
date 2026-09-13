@@ -9,9 +9,6 @@
   Import an <code>.rdp</code> file once, then connect with one click.
 </p>
 
-<p align="center">
-[![Built for Omarchy: App](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-app.svg)](https://github.com/tcballard/omarchy-badges)
-</p>
 
 <p align="center">
   <a href="https://github.com/ETroll/Vindauga/releases/latest">Download</a> ·
@@ -22,6 +19,8 @@
 ---
 
 *Vindauga* is the Old Norse word for window ("wind-eye"). The project is a C++20 / Qt 6 Quick application built on [FreeRDP 3](https://www.freerdp.com/), made for people who use Azure Virtual Desktop (AVD) or a Windows 365 Cloud PC from a Linux desktop and want something that simply works: no terminal, no hand-edited command lines, no browser tab pretending to be a desktop.
+
+[![Built for Omarchy: App](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-app.svg)](https://github.com/tcballard/omarchy-badges)
 
 It is built and tested primarily on Wayland (Hyprland, KDE Plasma) and also runs on X11.
 
