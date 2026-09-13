@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+[![Built for Omarchy: App](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-app.svg)](https://github.com/tcballard/omarchy-badges)
+</p>
+
+<p align="center">
   <a href="https://github.com/ETroll/Vindauga/releases/latest">Download</a> ·
   <a href="#getting-your-rdp-file">Getting your .rdp file</a> ·
   <a href="#building-from-source">Building from source</a>
