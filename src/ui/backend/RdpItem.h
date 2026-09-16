@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "AadWebAuthenticator.h"
+#include "CertificateTrustDialog.h"
 #include "RdstlsCredentialDialog.h"
 #include "Rdp/RdpSession.h"
 
@@ -122,6 +123,7 @@ private:
     std::unique_ptr<RdpSession> m_session;
     AadWebAuthenticator m_aadAuth;
     RdstlsCredentialDialog m_rdstlsPrompt;
+    CertificateTrustDialog m_certPrompt;
     // Authoritative source of the desktop's dimensions (set by onDesktopResized). Empty
     // means "no active session with a known resolution yet"; updatePaintNode() returns
     // early then.

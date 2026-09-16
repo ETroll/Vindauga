@@ -23,6 +23,8 @@ if(VINDAUGA_WITH_RDP)
     list(APPEND VINDAUGA_UI_SOURCES
         backend/AadWebAuthenticator.h
         backend/AadWebAuthenticator.cpp
+        backend/CertificateTrustDialog.h
+        backend/CertificateTrustDialog.cpp
         backend/RdstlsCredentialDialog.h
         backend/RdstlsCredentialDialog.cpp
         backend/RdpItem.h

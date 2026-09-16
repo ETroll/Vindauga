@@ -22,6 +22,7 @@ if(VINDAUGA_WITH_RDP)
         Rdp/RdpSession.h
         Rdp/RdpSession.cpp
         Rdp/AadInteractiveAuth.h
+        Rdp/CertificatePrompt.h
         Rdp/RdstlsCredentialPrompt.h
         Rdp/VaapiDeviceSelector.h
         Rdp/VaapiDeviceSelector.cpp

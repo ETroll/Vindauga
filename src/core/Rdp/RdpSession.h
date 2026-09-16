@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "AadInteractiveAuth.h"
+#include "CertificatePrompt.h"
 #include "RdstlsCredentialPrompt.h"
 
 // One RDP session on top of libfreerdp: context/settings setup, a dedicated worker
@@ -41,6 +42,11 @@ public:
     // by RdpSession. Without one, AuthenticateEx(AUTH_RDSTLS) falls back to empty
     // credentials, which an Entra-joined gateway rejects.
     void setRdstlsCredentialPrompt(RdstlsCredentialPrompt* prompt);
+
+    // Registers a certificate trust handler. Must be called before start(). Not owned by
+    // RdpSession. Without one, VerifyCertificateEx/VerifyChangedCertificateEx reject the
+    // connection rather than accepting an unverified certificate (see RdpSession.cpp).
+    void setCertificatePrompt(CertificatePrompt* prompt);
 
     // Diagnostics for context/settings parsing; usable without start().
     bool contextValid() const;
@@ -166,6 +172,11 @@ public:
     // Gives the AuthenticateEx callback access to the registered RDSTLS credential
     // handler. Public for the same reason as the notify* methods.
     RdstlsCredentialPrompt* rdstlsCredentialPrompt() const;
+
+    // Gives the VerifyCertificateEx/VerifyChangedCertificateEx callbacks access to the
+    // registered certificate trust handler. Public for the same reason as the notify*
+    // methods.
+    CertificatePrompt* certificatePrompt() const;
 
     // The cliprdr Server* callbacks run on FreeRDP's dedicated channel thread
     // (channel_client_thread_proc), not on this session's worker thread. Calling an

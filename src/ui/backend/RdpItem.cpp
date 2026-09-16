@@ -71,12 +71,14 @@ void RdpItem::connectToSession(const QString& rdpText, const QString& connection
     }
     m_session->setAadInteractiveAuth(&m_aadAuth);
     m_session->setRdstlsCredentialPrompt(&m_rdstlsPrompt);
+    m_session->setCertificatePrompt(&m_certPrompt);
 
-    // Show the AAD web view and the RDSTLS dialog as overlays inside our window rather
-    // than as separate top-level windows. Falls back to a separate window if window() is
-    // null (item not in a scene yet).
+    // Show the AAD web view, the RDSTLS dialog and the certificate prompt as overlays
+    // inside our window rather than as separate top-level windows. Falls back to a
+    // separate window if window() is null (item not in a scene yet).
     m_aadAuth.setHostWindow(window());
     m_rdstlsPrompt.setHostWindow(window());
+    m_certPrompt.setHostWindow(window());
 
     // Shared credential key for both handlers, so the RDSTLS dialog can be skipped and
     // the AAD web view autofilled with the same stored credentials. See CredentialStore.

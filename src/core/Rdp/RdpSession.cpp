@@ -225,14 +225,96 @@ BOOL vindaugaAuthenticateEx(freerdp* instance, char** username, char** password,
     return *username && *password && *domain;
 }
 
-DWORD vindaugaVerifyCertificateEx(freerdp* /*instance*/, const char* host, UINT16 /*port*/,
-                                  const char* /*commonName*/, const char* /*subject*/,
-                                  const char* /*issuer*/, const char* /*fingerprint*/,
-                                  DWORD /*flags*/) {
-    // TODO: real certificate validation / user prompt. Accepted for this session only
-    // for now.
-    qCWarning(lcRdp) << "Accepting TLS certificate without verification (temporary):" << host;
-    return 2; // accept for this session only
+// FreeRDP already tried to validate the certificate itself before ever calling this (see
+// tls_verify_certificate in libfreerdp/crypto/tls.c): it does a real X.509 chain
+// verification via OpenSSL against the system trust store (X509_STORE_set_default_paths,
+// i.e. the same CA bundle a browser would use) plus FreeRDP's own certs directory, and
+// checks the hostname against the certificate's CN/SAN. For an ordinary publicly-CA-signed
+// gateway certificate that succeeds and this callback is never invoked — nothing changes
+// for the common case. Only when that chain/hostname check fails does FreeRDP fall back to
+// its own known_hosts-style local cache (freerdp_certificate_store_contains_data): a
+// fingerprint that matches a previously-accepted entry for this host is accepted silently,
+// again without reaching here. This callback therefore only runs for a certificate FreeRDP
+// could neither verify via the CA chain nor recognize from a prior manual acceptance — new
+// (first connection to this host, no matching entry) or changed (a stored entry exists but
+// the fingerprint differs, flags & VERIFY_CERT_FLAG_CHANGED, handled by
+// vindaugaVerifyChangedCertificateEx instead) — so the only safe default without a
+// registered CertificatePrompt is to reject; silently accepting here is exactly the MITM
+// exposure this callback exists to prevent.
+DWORD vindaugaVerifyCertificateEx(freerdp* instance, const char* host, UINT16 port,
+                                  const char* commonName, const char* subject,
+                                  const char* issuer, const char* fingerprint, DWORD flags) {
+    auto* self =
+        static_cast<RdpSession*>(reinterpret_cast<VindaugaRdpContext*>(instance->context)->self);
+    CertificatePrompt* prompt = self ? self->certificatePrompt() : nullptr;
+    if (!prompt) {
+        qCWarning(lcRdp) << "No CertificatePrompt registered — rejecting unverified TLS "
+                             "certificate for"
+                          << host;
+        return 0;
+    }
+
+    CertificateInfo info;
+    info.host = QString::fromUtf8(host ? host : "");
+    info.port = port;
+    info.commonName = QString::fromUtf8(commonName ? commonName : "");
+    info.subject = QString::fromUtf8(subject ? subject : "");
+    info.issuer = QString::fromUtf8(issuer ? issuer : "");
+    info.fingerprint = QString::fromUtf8(fingerprint ? fingerprint : "");
+    info.hostMismatch = (flags & VERIFY_CERT_FLAG_MISMATCH) != 0;
+
+    switch (prompt->promptForCertificate(info)) {
+    case CertificatePrompt::Decision::AcceptAlways:
+        return 1;
+    case CertificatePrompt::Decision::AcceptOnce:
+        return 2;
+    case CertificatePrompt::Decision::Reject:
+    default:
+        return 0;
+    }
+}
+
+// Counterpart of vindaugaVerifyCertificateEx for a certificate that differs from the one
+// previously stored for this host (FreeRDP calls this instead of VerifyCertificateEx in
+// that case). Same accept/reject contract; additionally surfaces the previously-trusted
+// certificate's details so the user can tell a legitimate renewal from a substitution.
+DWORD vindaugaVerifyChangedCertificateEx(freerdp* instance, const char* host, UINT16 port,
+                                         const char* commonName, const char* subject,
+                                         const char* issuer, const char* fingerprint,
+                                         const char* oldSubject, const char* oldIssuer,
+                                         const char* oldFingerprint, DWORD flags) {
+    auto* self =
+        static_cast<RdpSession*>(reinterpret_cast<VindaugaRdpContext*>(instance->context)->self);
+    CertificatePrompt* prompt = self ? self->certificatePrompt() : nullptr;
+    if (!prompt) {
+        qCWarning(lcRdp) << "No CertificatePrompt registered — rejecting changed TLS "
+                             "certificate for"
+                          << host;
+        return 0;
+    }
+
+    CertificateInfo info;
+    info.host = QString::fromUtf8(host ? host : "");
+    info.port = port;
+    info.commonName = QString::fromUtf8(commonName ? commonName : "");
+    info.subject = QString::fromUtf8(subject ? subject : "");
+    info.issuer = QString::fromUtf8(issuer ? issuer : "");
+    info.fingerprint = QString::fromUtf8(fingerprint ? fingerprint : "");
+    info.isChanged = true;
+    info.hostMismatch = (flags & VERIFY_CERT_FLAG_MISMATCH) != 0;
+    info.oldSubject = QString::fromUtf8(oldSubject ? oldSubject : "");
+    info.oldIssuer = QString::fromUtf8(oldIssuer ? oldIssuer : "");
+    info.oldFingerprint = QString::fromUtf8(oldFingerprint ? oldFingerprint : "");
+
+    switch (prompt->promptForCertificate(info)) {
+    case CertificatePrompt::Decision::AcceptAlways:
+        return 1;
+    case CertificatePrompt::Decision::AcceptOnce:
+        return 2;
+    case CertificatePrompt::Decision::Reject:
+    default:
+        return 0;
+    }
 }
 
 // cliprdr (clipboard) channel callbacks. All run on cliprdr's own dedicated channel
@@ -617,6 +699,7 @@ BOOL vindaugaClientNew(freerdp* instance, rdpContext* context) {
     instance->PostConnect = vindaugaPostConnect;
     instance->AuthenticateEx = vindaugaAuthenticateEx;
     instance->VerifyCertificateEx = vindaugaVerifyCertificateEx;
+    instance->VerifyChangedCertificateEx = vindaugaVerifyChangedCertificateEx;
     instance->RetryDialog = vindaugaRetryDialog;
 
     // Register the rdpPointer prototype for pointer shapes (New/Free/Set/SetNull/
@@ -658,6 +741,7 @@ struct RdpSession::Impl {
     QThread* thread = nullptr;
     AadInteractiveAuth* aadAuth = nullptr; // not owned by RdpSession
     RdstlsCredentialPrompt* rdstlsPrompt = nullptr; // not owned by RdpSession
+    CertificatePrompt* certPrompt = nullptr; // not owned by RdpSession
 
     // Guard against self-triggering: armed (on the GUI thread) right before
     // setLocalClipboardText()'s QClipboard::setText() call, checked and cleared by the
@@ -867,6 +951,14 @@ void RdpSession::setRdstlsCredentialPrompt(RdstlsCredentialPrompt* prompt) {
 
 RdstlsCredentialPrompt* RdpSession::rdstlsCredentialPrompt() const {
     return m_impl->rdstlsPrompt;
+}
+
+void RdpSession::setCertificatePrompt(CertificatePrompt* prompt) {
+    m_impl->certPrompt = prompt;
+}
+
+CertificatePrompt* RdpSession::certificatePrompt() const {
+    return m_impl->certPrompt;
 }
 
 void RdpSession::start() {
