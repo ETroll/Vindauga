@@ -40,9 +40,20 @@ jobs:
       # PKGBUILD's `source=()` expects it, so makepkg uses the local file instead of
       # downloading the tag tarball; the package is built from exactly this commit.
       # The "Vindauga-$pkgver" prefix matches how GitHub itself names the tag tarball.
+      #
+      # PKGBUILD's own `pkgver=` is patched to match the tag here rather than relied upon
+      # as committed: it is a manually-maintained file (also used for local/AUR-style
+      # builds) that is easy to forget to bump alongside CMakeLists.txt's project()
+      # version. A stale pkgver breaks silently rather than failing the build — the
+      # locally-generated tarball name derived from the (correct) tag would no longer
+      # match what a stale PKGBUILD's source=() expects, so makepkg falls back to
+      # downloading the OLD tag's tarball from GitHub instead and happily builds/publishes
+      # that under the new release (see v1.3.0, where this shipped a 1.2.5 Arch package
+      # alongside a correctly-versioned 1.3.0 .deb).
       - name: Build local source tarball (see comment above)
         run: |
           pkgver="${GITHUB_REF_NAME#v}"
+          sed -i "s/^pkgver=.*/pkgver=$pkgver/" packaging/arch/PKGBUILD
           git archive --prefix="Vindauga-$pkgver/" \
             -o "packaging/arch/vindauga-$pkgver.tar.gz" HEAD
 

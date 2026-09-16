@@ -9,7 +9,7 @@
 # `sha256sums=('SKIP')` is deliberate for the same reason: the tarball is generated
 # locally, so there is no fixed upstream checksum to pin.
 pkgname=vindauga
-pkgver=1.2.5
+pkgver=1.3.0
 pkgrel=1
 pkgdesc="Native Linux client for Azure Virtual Desktop / Windows 365"
 arch=('x86_64')
