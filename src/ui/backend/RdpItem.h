@@ -12,9 +12,12 @@
 #include "AadWebAuthenticator.h"
 #include "CertificateTrustDialog.h"
 #include "RdstlsCredentialDialog.h"
+#include "Rdp/PressedInputTracker.h"
 #include "Rdp/RdpSession.h"
 
 class QSGNode;
+class QFocusEvent;
+class QWindow;
 
 namespace vindauga {
 
@@ -77,6 +80,8 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
+    void focusOutEvent(QFocusEvent* event) override;
+    void itemChange(ItemChange change, const ItemChangeData& value) override;
 
 private slots:
     // RdpSession::frameReady delivers a whole batch of (QImage, QRect) pairs per EndPaint
@@ -106,6 +111,11 @@ private:
     // session matches the window size at connect time.
     void requestRemoteResize(const QSizeF& logicalSize);
 
+    // Releases every key and mouse button the local user is still holding on the remote
+    // side. Called when the window loses focus or activation, since the matching key-up
+    // or button-up will not reach this item (see PressedInputTracker).
+    void releaseHeldInput();
+
     // Debounce for remote resize requests. A window drag or WM animation delivers many
     // intermediate geometries, and each resize request is a full round trip to the server
     // (new resolution negotiated on the display channel, video decoder reinitialised), so
@@ -113,6 +123,12 @@ private:
     // geometry has been unchanged for the timer interval (see the constructor).
     QTimer m_resizeDebounceTimer;
     QSizeF m_pendingResizeSize;
+
+    PressedInputTracker m_pressedInput;
+    // Last pointer position on the remote desktop, used to place button releases sent by
+    // releaseHeldInput().
+    QPoint m_lastRemotePointer;
+    QMetaObject::Connection m_windowActiveConnection;
 
     bool m_useDisplayScaleFactor = false;
     int m_frameBufferMs = 0;

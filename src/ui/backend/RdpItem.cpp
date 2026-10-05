@@ -1,6 +1,7 @@
 #include "RdpItem.h"
 
 #include <QCursor>
+#include <QFocusEvent>
 #include <QHoverEvent>
 #include <QKeyEvent>
 #include <QMetaObject>
@@ -61,6 +62,7 @@ void RdpItem::connectToSession(const QString& rdpText, const QString& connection
     m_desktopSize = QSize();
     m_pendingFrames.clear();
     m_pendingRenderPatches.clear();
+    m_pressedInput.clear();
     update();
 
     m_session = std::make_unique<RdpSession>(rdpText, QString());
@@ -126,6 +128,8 @@ void RdpItem::connectToSession(const QString& rdpText, const QString& connection
     });
     connect(m_session.get(), &RdpSession::disconnected, this, [this](const QString& reason) {
         m_connected = false;
+        // The server releases everything when the session ends; nothing left to release.
+        m_pressedInput.clear();
         // Do not let an RDP pointer shape from the finished session linger over the UI
         // shown afterwards.
         unsetCursor();
@@ -263,6 +267,8 @@ void RdpItem::mousePressEvent(QMouseEvent* event) {
     }
     const QPoint pos = mapToRemote(event->position());
     const Qt::MouseButton button = event->button();
+    m_lastRemotePointer = pos;
+    m_pressedInput.buttonDown(button);
     QMetaObject::invokeMethod(
         m_session.get(),
         [session = m_session.get(), pos, button]() { session->sendMouseButtonEvent(pos, button, true); },
@@ -280,7 +286,8 @@ void RdpItem::mouseMoveEvent(QMouseEvent* event) {
     }
     // queueMouseMove() coalesces (last position wins) and signals the wake event itself;
     // queueing one invokeMethod per mouse move gave a jerky pointer after an idle period.
-    m_session->queueMouseMove(mapToRemote(event->position()));
+    m_lastRemotePointer = mapToRemote(event->position());
+    m_session->queueMouseMove(m_lastRemotePointer);
     event->accept();
 }
 
@@ -291,6 +298,8 @@ void RdpItem::mouseReleaseEvent(QMouseEvent* event) {
     }
     const QPoint pos = mapToRemote(event->position());
     const Qt::MouseButton button = event->button();
+    m_lastRemotePointer = pos;
+    m_pressedInput.buttonUp(button);
     QMetaObject::invokeMethod(
         m_session.get(),
         [session = m_session.get(), pos, button]() { session->sendMouseButtonEvent(pos, button, false); },
@@ -330,6 +339,7 @@ void RdpItem::keyPressEvent(QKeyEvent* event) {
     }
     const quint32 scanCode = static_cast<quint32>(event->nativeScanCode());
     const bool autoRepeat = event->isAutoRepeat();
+    m_pressedInput.keyDown(scanCode);
     QMetaObject::invokeMethod(
         m_session.get(),
         [session = m_session.get(), scanCode, autoRepeat]() {
@@ -347,6 +357,7 @@ void RdpItem::keyReleaseEvent(QKeyEvent* event) {
     }
     const quint32 scanCode = static_cast<quint32>(event->nativeScanCode());
     const bool autoRepeat = event->isAutoRepeat();
+    m_pressedInput.keyUp(scanCode);
     QMetaObject::invokeMethod(
         m_session.get(),
         [session = m_session.get(), scanCode, autoRepeat]() {
@@ -355,6 +366,46 @@ void RdpItem::keyReleaseEvent(QKeyEvent* event) {
         Qt::QueuedConnection);
     m_session->requestWakeUp();
     event->accept();
+}
+
+void RdpItem::focusOutEvent(QFocusEvent* event) {
+    releaseHeldInput();
+    QQuickItem::focusOutEvent(event);
+}
+
+void RdpItem::itemChange(ItemChange change, const ItemChangeData& value) {
+    QQuickItem::itemChange(change, value);
+    if (change != ItemSceneChange)
+        return;
+    QObject::disconnect(m_windowActiveConnection);
+    if (QQuickWindow* newWindow = value.window) {
+        // Focus moving inside the scene is covered by focusOutEvent. Losing activation
+        // of the whole window (lock screen, another application) is not, and the key-up
+        // then goes elsewhere.
+        m_windowActiveConnection =
+            connect(newWindow, &QWindow::activeChanged, this, [this, newWindow]() {
+                if (!newWindow->isActive())
+                    releaseHeldInput();
+            });
+    }
+}
+
+void RdpItem::releaseHeldInput() {
+    const PressedInputTracker::Releases releases = m_pressedInput.takeAll();
+    // Not gated on m_connected: a press may already be queued to the session worker
+    // while the connection is still being set up, and its release must follow it.
+    if (releases.isEmpty() || !m_session)
+        return;
+    QMetaObject::invokeMethod(
+        m_session.get(),
+        [session = m_session.get(), releases, pos = m_lastRemotePointer]() {
+            for (quint32 scanCode : releases.keys)
+                session->sendKeyEvent(scanCode, false, false);
+            for (Qt::MouseButton button : releases.buttons)
+                session->sendMouseButtonEvent(pos, button, false);
+        },
+        Qt::QueuedConnection);
+    m_session->requestWakeUp();
 }
 
 void RdpItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {

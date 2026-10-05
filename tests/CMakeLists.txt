@@ -12,6 +12,10 @@ target_link_libraries(test_connectionstore PRIVATE vindauga_core Qt6::Test Qt6::
 target_compile_definitions(test_connectionstore PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME connectionstore COMMAND test_connectionstore)
 
+qt_add_executable(test_pressedinputtracker test_pressedinputtracker.cpp)
+target_link_libraries(test_pressedinputtracker PRIVATE vindauga_core Qt6::Test Qt6::Core)
+add_test(NAME pressedinputtracker COMMAND test_pressedinputtracker)
+
 if(VINDAUGA_WITH_RDP)
     qt_add_executable(test_rdpsession test_rdpsession.cpp)
     target_link_libraries(test_rdpsession PRIVATE vindauga_core Qt6::Test Qt6::Core)
