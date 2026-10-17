@@ -55,6 +55,11 @@ public:
     // connection rather than accepting an unverified certificate (see RdpSession.cpp).
     void setCertificatePrompt(CertificatePrompt* prompt);
 
+    // Seconds between synthetic mouse movements while the user is idle
+    // (FreeRDP_FakeMouseMotionInterval); 0 (default) disables them. Must be called before
+    // start(). See AppSettings::preventSessionLockSeconds.
+    void setPreventSessionLockSeconds(int seconds);
+
     // Diagnostics for context/settings parsing; usable without start().
     bool contextValid() const;
     QString gatewayHostname() const;
@@ -228,6 +233,10 @@ private slots:
     void performResyncNudge();
 
 private:
+    // Mid-session reconnect after a transport failure; see runConnectionLoop().
+    bool shouldAutoReconnect() const;
+    bool reconnect();
+
     // Registered via setDecodeFailureCallback (Logging.h) while runConnectionLoop() runs
     // and removed when it ends. Not a Qt slot: invoked directly as a std::function from
     // whatever thread produced the log line. Does the minimum (debounce check plus a

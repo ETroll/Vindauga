@@ -8,6 +8,8 @@
 #include <QQuickWindow>
 #include <QThread>
 #include <QTimer>
+#include <QtWebEngineCore/QWebEngineCookieStore>
+#include <QtWebEngineQuick/QQuickWebEngineProfile>
 #include <memory>
 
 #include "Logging.h"
@@ -18,7 +20,8 @@ namespace {
 
 // Single-use QML view: loads authUrl, intercepts the navigation to redirectPrefix in
 // onNavigationRequested (rejecting it, so the redirect page is never loaded), extracts
-// the code/error query parameters in JS and reports them back as Qt signals.
+// the code/error query parameters in JS and reports them back as Qt signals. The
+// profile is assigned from C++ (signInProfile()) before the URL is set.
 constexpr auto kCaptureQml = R"QML(
 import QtQuick
 import QtWebEngine
@@ -63,6 +66,10 @@ WebEngineView {
             "function first(sels){for(var i=0;i<sels.length;i++){var e=document.querySelector(sels[i]);if(e)return e;}return null;}" +
             "var alreadyUser=" + (usernameFilled ? "true" : "false") + ";" +
             "if(!alreadyUser){" +
+            // With persistent cookies the page is usually the account picker: click the
+            // stored account's tile (Microsoft tags tiles with data-test-id=<upn>).
+            "var tile=document.querySelector('[data-test-id='+JSON.stringify(" + JSON.stringify(storedUsername) + ")+']');" +
+            "if(tile){tag('clicking account tile');tile.click();return 'filled-username';}" +
             "var u=first(['#i0116','input[name=\"loginfmt\"]','input[type=\"email\"]']);" +
             "if(u){tag('found username field, filling in');setVal(u," + JSON.stringify(storedUsername) + ");" +
             "var n=first(['#idSIButton9','input[type=\"submit\"]','button[type=\"submit\"]']);" +
@@ -104,6 +111,13 @@ WebEngineView {
             webView.autofillLog(message)
     }
 
+    // The sign-in flow is single-window. Not calling request.openIn() blocks the popup;
+    // a new top-level window would otherwise escape the overlay and could never report
+    // a code back.
+    onNewWindowRequested: function(request) {
+        webView.autofillLog("blocked popup to " + request.requestedUrl)
+    }
+
     Timer {
         id: retryTimer
         interval: 600
@@ -143,6 +157,14 @@ WebEngineView {
 
 constexpr int kTimeoutMs = 5 * 60 * 1000; // plenty of time for MFA
 
+// How long a sign-in may run invisibly before the page is shown. Long enough for the
+// cookie-backed redirect chain (authorize -> account picker auto-select -> redirect)
+// over a normal connection, short enough that a user who does need to type notices no
+// real delay.
+constexpr int kShowDelayMs = 3000;
+
+constexpr auto kProfileStorageName = "entra-signin";
+
 } // namespace
 
 AadWebAuthenticator::AadWebAuthenticator(QObject* parent) : QObject(parent) {}
@@ -153,6 +175,40 @@ void AadWebAuthenticator::setHostWindow(QQuickWindow* window) {
 
 void AadWebAuthenticator::setConnectionKey(const QString& key) {
     m_connectionKey = key;
+}
+
+QQuickWebEngineProfile* AadWebAuthenticator::signInProfile() {
+    // QtWebEngine's default profile, reconfigured once before any view uses it, rather
+    // than a profile of our own: the sign-in view is the only web content in the app,
+    // and Qt 6.9+ deprecates constructing QQuickWebEngineProfile directly from C++. The
+    // default profile is application-owned and outlives every capture's QQmlEngine.
+    static bool configured = false;
+    QQuickWebEngineProfile* profile = QQuickWebEngineProfile::defaultProfile();
+    if (configured)
+        return profile;
+    configured = true;
+    profile->setStorageName(QString::fromLatin1(kProfileStorageName));
+    profile->setOffTheRecord(false);
+    // Session cookies included: Microsoft's SSO state is partly session-scoped, and the
+    // whole point is that it survives until the next sign-in.
+    profile->setPersistentCookiesPolicy(QQuickWebEngineProfile::ForcePersistentCookies);
+    // No disk cache for page assets; cookies/local storage are what matter and they are
+    // persisted separately.
+    profile->setHttpCacheType(QQuickWebEngineProfile::MemoryHttpCache);
+    qCDebug(lcAuth) << "Sign-in web profile at" << profile->persistentStoragePath();
+    return profile;
+}
+
+void AadWebAuthenticator::setSignInUserAgent(const QString& userAgent) {
+    // Chromium's default is restored by setting an empty string.
+    signInProfile()->setHttpUserAgent(userAgent);
+}
+
+void AadWebAuthenticator::clearSignInState() {
+    QQuickWebEngineProfile* profile = signInProfile();
+    profile->cookieStore()->deleteAllCookies();
+    profile->clearHttpCache();
+    qCDebug(lcAuth) << "Sign-in web profile cookies cleared";
 }
 
 QString AadWebAuthenticator::captureAuthorizationCode(const QUrl& authUrl,
@@ -170,8 +226,24 @@ QString AadWebAuthenticator::captureAuthorizationCode(const QUrl& authUrl,
     return result;
 }
 
+void AadWebAuthenticator::cancelCapture() {
+    if (m_captureLoop) {
+        qCInfo(lcAuth) << "AAD sign-in cancelled";
+        m_captureLoop->quit();
+    }
+}
+
+void AadWebAuthenticator::shutdown() {
+    m_shutDown = true;
+    cancelCapture();
+}
+
 QString AadWebAuthenticator::captureOnGuiThread(const QUrl& authUrl,
                                                 const QString& redirectPrefix) {
+    if (m_shutDown) {
+        qCDebug(lcAuth) << "AAD sign-in requested after shutdown; returning no code";
+        return {};
+    }
     QQmlEngine engine;
     QQmlComponent component(&engine);
     component.setData(QByteArray(kCaptureQml), QUrl());
@@ -200,11 +272,14 @@ QString AadWebAuthenticator::captureOnGuiThread(const QUrl& authUrl,
         ownWindow->resize(480, 640);
         ownWindow->setTitle(tr("Vindauga — Entra ID sign-in"));
     }
+    // Hidden until showTimer fires: a sign-in that completes on its own never appears.
+    webView->setVisible(false);
 
     connect(webView, SIGNAL(codeCaptured(QString)), this, SLOT(onCodeCaptured(QString)));
     connect(webView, SIGNAL(authFailed(QString)), this, SLOT(onAuthFailed(QString)));
     connect(webView, SIGNAL(autofillLog(QString)), this, SLOT(onAutofillLog(QString)));
 
+    webView->setProperty("profile", QVariant::fromValue(signInProfile()));
     webView->setProperty("redirectPrefix", redirectPrefix);
     webView->setProperty("url", authUrl);
     if (!m_connectionKey.isEmpty()) {
@@ -220,8 +295,15 @@ QString AadWebAuthenticator::captureOnGuiThread(const QUrl& authUrl,
     QEventLoop loop;
     m_captureLoop = &loop;
 
-    if (ownWindow)
-        ownWindow->show();
+    QTimer showTimer;
+    showTimer.setSingleShot(true);
+    connect(&showTimer, &QTimer::timeout, webView, [webView, &ownWindow]() {
+        qCDebug(lcAuth) << "Sign-in needs input; showing the web view";
+        webView->setVisible(true);
+        if (ownWindow)
+            ownWindow->show();
+    });
+    showTimer.start(kShowDelayMs);
 
     QTimer timeoutTimer;
     timeoutTimer.setSingleShot(true);
@@ -230,6 +312,7 @@ QString AadWebAuthenticator::captureOnGuiThread(const QUrl& authUrl,
 
     loop.exec();
     m_captureLoop = nullptr;
+    showTimer.stop();
     if (ownWindow)
         ownWindow->close();
     else
@@ -241,6 +324,9 @@ QString AadWebAuthenticator::captureOnGuiThread(const QUrl& authUrl,
     }
     if (m_capturedCode.isEmpty())
         qCWarning(lcAuth) << "AAD sign-in timed out or closed without a result";
+    else
+        qCInfo(lcAuth) << "AAD sign-in completed" << (webView->isVisible() ? "with" : "without")
+                       << "showing the web view";
     return m_capturedCode;
 }
 

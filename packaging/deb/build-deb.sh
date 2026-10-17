@@ -157,7 +157,7 @@ if command -v dpkg-shlibdeps >/dev/null 2>&1; then
   # ubuntu-24.04 runner rather than in a container.
   #
   # -lopt/vindauga/lib tells dpkg-shlibdeps where the BUNDLED Qt/qtkeychain libs live.
-  # Without it, resolution fails with "cannot find library libQt6NetworkAuth.so.6 needed by
+  # Without it, resolution fails with "cannot find library libQt6Core.so.6 needed by
   # opt/vindauga/bin/vindauga". The step fails loudly on an empty result: an empty Depends
   # list on a Debian machine is always a bug.
   mkdir -p "$PKGROOT/debian"

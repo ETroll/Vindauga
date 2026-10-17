@@ -26,14 +26,20 @@ constexpr auto kAcceptFeed = "application/x-msts-radc+xml;radc_schema_version=2.
 
 constexpr int kHttpTimeoutMs = 30000;
 
-QByteArray userAgent() {
+} // namespace
+
+FeedClient::FeedClient(QUrl discoveryUrl, QByteArray userAgent)
+    : m_discoveryUrl(std::move(discoveryUrl)), m_userAgent(std::move(userAgent)) {
+    if (m_discoveryUrl.isEmpty())
+        m_discoveryUrl = defaultDiscoveryUrl();
+    if (m_userAgent.isEmpty())
+        m_userAgent = defaultUserAgent();
+}
+
+QByteArray FeedClient::defaultUserAgent() {
     const QByteArray override = qgetenv("VINDAUGA_FEED_USER_AGENT");
     return override.isEmpty() ? QByteArray(kDefaultUserAgent) : override;
 }
-
-} // namespace
-
-FeedClient::FeedClient(QUrl discoveryUrl) : m_discoveryUrl(std::move(discoveryUrl)) {}
 
 QUrl FeedClient::defaultDiscoveryUrl() {
     const QByteArray override = qgetenv("VINDAUGA_FEED_DISCOVERY_URL");
@@ -44,7 +50,10 @@ bool FeedClient::isTrustedUrl(const QUrl& url) {
     if (!url.isValid() || url.scheme() != QLatin1String("https"))
         return false;
     const QString host = url.host().toLower();
-    for (const auto* suffix : {".microsoft.com", ".microsoftonline.com"}) {
+    // Public cloud, Azure Government (rdweb.wvd.azure.us, login.microsoftonline.us) and
+    // Azure China (rdweb.wvd.azure.cn, login.chinacloudapi.cn).
+    for (const auto* suffix : {".microsoft.com", ".microsoftonline.com", ".azure.us",
+                               ".microsoftonline.us", ".azure.cn", ".chinacloudapi.cn"}) {
         const QString s = QString::fromLatin1(suffix);
         if (host == s.mid(1) || host.endsWith(s))
             return true;
@@ -65,8 +74,8 @@ QByteArray FeedClient::get(const QUrl& url, const QString& accessToken, const QB
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", "Bearer " + accessToken.toUtf8());
     request.setRawHeader("Accept", accept);
-    request.setRawHeader("User-Agent", userAgent());
-    request.setRawHeader("X-MS-User-Agent", userAgent());
+    request.setRawHeader("User-Agent", m_userAgent);
+    request.setRawHeader("X-MS-User-Agent", m_userAgent);
     request.setTransferTimeout(kHttpTimeoutMs);
 
     QEventLoop loop;

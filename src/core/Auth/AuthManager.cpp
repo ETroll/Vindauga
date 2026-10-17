@@ -9,6 +9,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QUrlQuery>
 
 #include "../Logging.h"
@@ -27,11 +28,14 @@ constexpr auto kDefaultClientId = "a85cf173-4192-42f8-81fa-777a763e6e2c";
 // account is entitled to across tenants. Override with VINDAUGA_TENANT to pin one tenant.
 constexpr auto kDefaultTenant = "organizations";
 
-constexpr auto kLoginHost = "https://login.microsoftonline.com";
+// Sign-in authority. VINDAUGA_LOGIN_HOST overrides it for sovereign clouds
+// (https://login.microsoftonline.us, https://login.chinacloudapi.cn); the redirect below
+// follows the same host. Not verified against a sovereign tenant.
+constexpr auto kDefaultLoginHost = "https://login.microsoftonline.com";
 
 // Registered redirect for the public client: the browser lands on a blank page with
 // ?code=... that the web view intercepts.
-constexpr auto kRedirect = "https://login.microsoftonline.com/common/oauth2/nativeclient";
+constexpr auto kRedirectPath = "/common/oauth2/nativeclient";
 
 constexpr auto kFeedScope = "https://www.wvd.microsoft.com/.default offline_access openid profile";
 
@@ -40,6 +44,10 @@ constexpr auto kFeedScope = "https://www.wvd.microsoft.com/.default offline_acce
 constexpr auto kRefreshTokenKey = "entra-refresh-token";
 
 constexpr int kHttpTimeoutMs = 30000;
+
+// A cached access token is reused only while it has at least this long left; FreeRDP
+// needs the token to survive the whole gateway/session-host handshake.
+constexpr int kExpiryMarginSecs = 60;
 
 QString envOr(const char* name, const char* fallback) {
     const QByteArray value = qgetenv(name);
@@ -63,7 +71,11 @@ QString randomUrlSafeString(int bytes) {
 AuthManager::AuthManager(QObject* parent)
     : QObject(parent),
       m_clientId(envOr("VINDAUGA_CLIENT_ID", kDefaultClientId)),
-      m_tenant(envOr("VINDAUGA_TENANT", kDefaultTenant)) {}
+      m_tenant(envOr("VINDAUGA_TENANT", kDefaultTenant)),
+      m_loginHost(envOr("VINDAUGA_LOGIN_HOST", kDefaultLoginHost)) {
+    while (m_loginHost.endsWith(QLatin1Char('/')))
+        m_loginHost.chop(1);
+}
 
 AuthManager::~AuthManager() = default;
 
@@ -72,15 +84,20 @@ QString AuthManager::clientId() const {
 }
 
 QString AuthManager::redirectPrefix() const {
-    return QString::fromLatin1(kRedirect);
+    return m_loginHost + QLatin1String(kRedirectPath);
 }
 
 QString AuthManager::feedScopeEncoded() {
     return QString::fromLatin1(QUrl::toPercentEncoding(QString::fromLatin1(kFeedScope)));
 }
 
+void AuthManager::setUserAgent(const QString& userAgent) {
+    QMutexLocker lock(&m_mutex);
+    m_userAgent = userAgent;
+}
+
 QUrl AuthManager::tokenEndpoint() const {
-    return QUrl(QStringLiteral("%1/%2/oauth2/v2.0/token").arg(QString::fromLatin1(kLoginHost), m_tenant));
+    return QUrl(QStringLiteral("%1/%2/oauth2/v2.0/token").arg(m_loginHost, m_tenant));
 }
 
 QString AuthManager::pkceChallenge(const QString& verifier) {
@@ -97,13 +114,49 @@ QJsonObject AuthManager::decodeJwtPayload(const QString& jwt) {
     return doc.isObject() ? doc.object() : QJsonObject();
 }
 
+QString AuthManager::explainAuthError(const QString& error) {
+    if (error.isEmpty())
+        return {};
+    static const QRegularExpression codePattern(QStringLiteral("AADSTS(\\d+)"));
+    const QRegularExpressionMatch match = codePattern.match(error);
+    const QString code = match.hasMatch() ? match.captured(1) : QString();
+    const QString suffix = code.isEmpty() ? QString() : QStringLiteral(" (AADSTS%1)").arg(code);
+
+    if (error.startsWith(QLatin1String("network error")))
+        return QStringLiteral("Could not reach Microsoft's sign-in service. Check the network "
+                              "connection and try again.");
+    if (error.startsWith(QLatin1String("no refresh token stored")))
+        return QStringLiteral("Not signed in yet.");
+    if (code == QLatin1String("70043") || code == QLatin1String("50173") ||
+        code == QLatin1String("50078") || code == QLatin1String("50076") ||
+        code == QLatin1String("50079"))
+        return QStringLiteral("Your organisation requires you to sign in again (a sign-in "
+                              "frequency or multi-factor policy).") + suffix;
+    if (code == QLatin1String("700082") || code == QLatin1String("70008") ||
+        code == QLatin1String("50089"))
+        return QStringLiteral("The saved sign-in expired through inactivity. Sign in again.") +
+               suffix;
+    if (code == QLatin1String("53003") || code == QLatin1String("530003") ||
+        code == QLatin1String("53000") || code == QLatin1String("53001"))
+        return QStringLiteral("Blocked by a Conditional Access policy: your organisation only "
+                              "allows managed or compliant devices for this app.") + suffix;
+    if (code == QLatin1String("50020") || code == QLatin1String("50034") ||
+        code == QLatin1String("90072"))
+        return QStringLiteral("This account is not allowed to use Azure Virtual Desktop in "
+                              "this tenant.") + suffix;
+    if (error.startsWith(QLatin1String("invalid_grant")) ||
+        error.startsWith(QLatin1String("interaction_required")))
+        return QStringLiteral("The saved sign-in is no longer valid. Sign in again.") + suffix;
+    return error;
+}
+
 QUrl AuthManager::buildAuthorizeUrl(const QString& codeChallenge, const QString& state,
                                     const QString& loginHint) const {
-    QUrl url(QStringLiteral("%1/%2/oauth2/v2.0/authorize").arg(QString::fromLatin1(kLoginHost), m_tenant));
+    QUrl url(QStringLiteral("%1/%2/oauth2/v2.0/authorize").arg(m_loginHost, m_tenant));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("client_id"), m_clientId);
     query.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
-    query.addQueryItem(QStringLiteral("redirect_uri"), QString::fromLatin1(kRedirect));
+    query.addQueryItem(QStringLiteral("redirect_uri"), redirectPrefix());
     query.addQueryItem(QStringLiteral("scope"), QString::fromLatin1(kFeedScope));
     query.addQueryItem(QStringLiteral("code_challenge"), codeChallenge);
     query.addQueryItem(QStringLiteral("code_challenge_method"), QStringLiteral("S256"));
@@ -111,7 +164,8 @@ QUrl AuthManager::buildAuthorizeUrl(const QString& codeChallenge, const QString&
     // Always the account picker. Without a prompt, tenants with Seamless SSO can hang the
     // web view on "Trying to sign you in" (it needs a Windows Kerberos ticket), and
     // prompt=login forces a full re-login that triggers "Keep your account secure"
-    // interrupts. The picker is one click when SSO cookies are present.
+    // interrupts. The picker is one click when SSO cookies are present, and skipped
+    // entirely when login_hint names the account.
     query.addQueryItem(QStringLiteral("prompt"), QStringLiteral("select_account"));
     if (!loginHint.isEmpty())
         query.addQueryItem(QStringLiteral("login_hint"), loginHint);
@@ -129,6 +183,11 @@ AuthManager::TokenResponse AuthManager::postTokenRequest(const QByteArray& formB
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
     request.setTransferTimeout(kHttpTimeoutMs);
+    {
+        QMutexLocker lock(&m_mutex);
+        if (!m_userAgent.isEmpty())
+            request.setHeader(QNetworkRequest::UserAgentHeader, m_userAgent);
+    }
 
     QEventLoop loop;
     QNetworkReply* reply = nam.post(request, formBody);
@@ -163,7 +222,32 @@ quint64 AuthManager::currentGeneration() const {
     return m_generation;
 }
 
-bool AuthManager::adoptTokens(const TokenResponse& response, bool forFeed, quint64 generation) {
+QString AuthManager::cacheKey(const QString& scopeEncoded, const QString& reqCnf) {
+    // The same scope set spelled in a different order is the same token request (Entra
+    // ignores the order): the feed sign-in asks for ".default offline_access openid
+    // profile" and FreeRDP's gateway scope for ".default openid profile offline_access",
+    // so the words are sorted to make the feed token serve the first connection too.
+    QStringList words = QUrl::fromPercentEncoding(scopeEncoded.toLatin1())
+                            .split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    words.sort();
+    const QString normalised = words.join(QLatin1Char(' '));
+    // A proof-of-possession token is bound to the key in req_cnf, so a different key
+    // must never get a token minted for another one.
+    return reqCnf.isEmpty() ? normalised : normalised + QLatin1Char('|') + reqCnf;
+}
+
+QString AuthManager::cachedToken(const QString& key) const {
+    QMutexLocker lock(&m_mutex);
+    const auto it = m_tokens.constFind(key);
+    if (it == m_tokens.constEnd())
+        return {};
+    if (QDateTime::currentDateTime().secsTo(it->expiresAt) <= kExpiryMarginSecs)
+        return {};
+    return it->token;
+}
+
+bool AuthManager::adoptTokens(const TokenResponse& response, const QString& cacheKey,
+                              quint64 generation) {
     QMutexLocker opLock(&m_opMutex); // generation check + persistence are one step vs signOut()
     bool rotated = false;
     {
@@ -176,10 +260,8 @@ bool AuthManager::adoptTokens(const TokenResponse& response, bool forFeed, quint
             m_refreshToken = response.refreshToken;
             rotated = true;
         }
-        if (forFeed) {
-            m_feedAccessToken = response.accessToken;
-            m_feedExpiresAt = QDateTime::currentDateTime().addSecs(response.expiresIn);
-        }
+        m_tokens.insert(cacheKey, { response.accessToken,
+                                    QDateTime::currentDateTime().addSecs(response.expiresIn) });
         if (!response.idToken.isEmpty()) {
             const QJsonObject claims = decodeJwtPayload(response.idToken);
             for (const auto* key : {"preferred_username", "upn", "unique_name", "email"}) {
@@ -234,7 +316,7 @@ bool AuthManager::signInInteractive(AadInteractiveAuth& auth, QString* error) {
     body += "grant_type=authorization_code";
     body += "&client_id=" + QUrl::toPercentEncoding(m_clientId);
     body += "&code=" + QUrl::toPercentEncoding(code);
-    body += "&redirect_uri=" + QUrl::toPercentEncoding(QString::fromLatin1(kRedirect));
+    body += "&redirect_uri=" + QUrl::toPercentEncoding(redirectPrefix());
     body += "&scope=" + feedScopeEncoded().toLatin1();
     body += "&code_verifier=" + verifier.toLatin1();
 
@@ -254,10 +336,11 @@ bool AuthManager::signInInteractive(AadInteractiveAuth& auth, QString* error) {
         {
             QMutexLocker lock(&m_mutex);
             m_refreshToken.clear();
+            m_tokens.clear();
         }
         m_store.remove(QString::fromLatin1(kRefreshTokenKey));
     }
-    if (!adoptTokens(response, true, generation)) {
+    if (!adoptTokens(response, cacheKey(feedScopeEncoded(), QString()), generation)) {
         if (error)
             *error = QStringLiteral("signed out during sign-in");
         return false;
@@ -318,7 +401,7 @@ AuthManager::TokenResponse AuthManager::refreshGrant(const QString& scopeEncoded
     TokenResponse response = postTokenRequest(body);
     if (!response.ok) {
         qCWarning(lcAuth) << "Refresh grant failed:" << response.error;
-    } else if (!adoptTokens(response, scopeEncoded == feedScopeEncoded(), generation)) {
+    } else if (!adoptTokens(response, cacheKey(scopeEncoded, reqCnf), generation)) {
         response = TokenResponse();
         response.error = QStringLiteral("signed out while the token request was in flight");
     }
@@ -342,8 +425,7 @@ void AuthManager::signOut() {
         QMutexLocker lock(&m_mutex);
         ++m_generation; // invalidates any grant currently in flight (see adoptTokens)
         m_refreshToken.clear();
-        m_feedAccessToken.clear();
-        m_feedExpiresAt = QDateTime();
+        m_tokens.clear();
         m_upn.clear();
     }
     m_store.remove(QString::fromLatin1(kRefreshTokenKey));
@@ -351,21 +433,18 @@ void AuthManager::signOut() {
 }
 
 QString AuthManager::feedAccessToken() {
-    {
-        QMutexLocker lock(&m_mutex);
-        if (!m_feedAccessToken.isEmpty() &&
-            QDateTime::currentDateTime().secsTo(m_feedExpiresAt) > 60)
-            return m_feedAccessToken;
-    }
+    const QString key = cacheKey(feedScopeEncoded(), QString());
+    const QString cached = cachedToken(key);
+    if (!cached.isEmpty())
+        return cached;
     if (!signInSilently())
         return {};
-    QMutexLocker lock(&m_mutex);
-    return m_feedAccessToken;
+    return cachedToken(key);
 }
 
 QDateTime AuthManager::feedTokenExpiresAt() const {
     QMutexLocker lock(&m_mutex);
-    return m_feedExpiresAt;
+    return m_tokens.value(cacheKey(feedScopeEncoded(), QString())).expiresAt;
 }
 
 QString AuthManager::userPrincipalName() const {
@@ -374,6 +453,12 @@ QString AuthManager::userPrincipalName() const {
 }
 
 QString AuthManager::acquireAccessToken(const QString& scopeEncoded, const QString& reqCnf) {
+    const QString cached = cachedToken(cacheKey(scopeEncoded, reqCnf));
+    if (!cached.isEmpty()) {
+        qCDebug(lcAuth) << "Silent token request served from cache, scope" << scopeEncoded
+                        << "length" << cached.size();
+        return cached;
+    }
     qCDebug(lcAuth) << "Silent token request, scope" << scopeEncoded << "req_cnf present:"
                     << !reqCnf.isEmpty();
     const TokenResponse response = refreshGrant(scopeEncoded, reqCnf);

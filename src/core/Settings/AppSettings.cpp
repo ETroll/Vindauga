@@ -21,6 +21,9 @@ constexpr auto kUseDisplayScaleFactorKey = "useDisplayScaleFactor";
 constexpr auto kHardwareVideoDecodingKey = "hardwareVideoDecoding";
 constexpr auto kPreferredVaapiDeviceKey = "preferredVaapiDevice";
 constexpr auto kFrameBufferMsKey = "frameBufferMs";
+constexpr auto kPreventSessionLockSecondsKey = "preventSessionLockSeconds";
+constexpr auto kFeedDiscoveryUrlKey = "feedDiscoveryUrl";
+constexpr auto kSignInUserAgentKey = "signInUserAgent";
 
 } // namespace
 
@@ -82,6 +85,48 @@ void AppSettings::setFrameBufferMs(int value) {
     QSettings settings(m_path, QSettings::IniFormat);
     settings.setValue(kFrameBufferMsKey, value);
     emit frameBufferMsChanged();
+}
+
+int AppSettings::preventSessionLockSeconds() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return std::clamp(settings.value(kPreventSessionLockSecondsKey, 0).toInt(), 0, 3600);
+}
+
+void AppSettings::setPreventSessionLockSeconds(int value) {
+    value = std::clamp(value, 0, 3600);
+    if (value == preventSessionLockSeconds())
+        return;
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kPreventSessionLockSecondsKey, value);
+    emit preventSessionLockSecondsChanged();
+}
+
+QString AppSettings::feedDiscoveryUrl() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return settings.value(kFeedDiscoveryUrlKey, QString()).toString().trimmed();
+}
+
+void AppSettings::setFeedDiscoveryUrl(QString value) {
+    value = value.trimmed();
+    if (value == feedDiscoveryUrl())
+        return;
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kFeedDiscoveryUrlKey, value);
+    emit feedDiscoveryUrlChanged();
+}
+
+QString AppSettings::signInUserAgent() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return settings.value(kSignInUserAgentKey, QString()).toString().trimmed();
+}
+
+void AppSettings::setSignInUserAgent(QString value) {
+    value = value.trimmed();
+    if (value == signInUserAgent())
+        return;
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kSignInUserAgentKey, value);
+    emit signInUserAgentChanged();
 }
 
 } // namespace vindauga

@@ -45,6 +45,15 @@ class RdpItem : public QQuickItem {
     // m_frameBufferTimer); collects more frames than plain coalescing would, at the cost
     // of that much extra visual latency. Default 0 (off: draw as soon as possible).
     Q_PROPERTY(int frameBufferMs MEMBER m_frameBufferMs)
+    // Set from QML (bound to AppController::preventSessionLockSeconds); applied to each
+    // session created by connectToSession (see RdpSession::setPreventSessionLockSeconds).
+    Q_PROPERTY(int preventSessionLockSeconds MEMBER m_preventSessionLockSeconds)
+    // Silent token source for every session created by connectToSession, as a QObject so
+    // QML can bind it (AadTokenProvider is not a QObject; AuthManager is both). Typically
+    // bound to AppController::auth. Objects that do not implement AadTokenProvider are
+    // ignored with a warning.
+    Q_PROPERTY(QObject* aadTokenProvider READ aadTokenProviderObject WRITE
+                   setAadTokenProviderObject NOTIFY aadTokenProviderChanged)
 public:
     explicit RdpItem(QQuickItem* parent = nullptr);
     ~RdpItem() override;
@@ -60,6 +69,8 @@ public:
     // Optional silent token source handed to every session created by connectToSession
     // (see RdpSession::setAadTokenProvider). Not owned; nullptr (default) disables it.
     void setAadTokenProvider(AadTokenProvider* provider);
+    QObject* aadTokenProviderObject() const;
+    void setAadTokenProviderObject(QObject* object);
 
     // Called by the scene graph on the GUI thread during the sync phase (the render
     // thread is blocked until sync is done), so m_pendingRenderPatches/m_desktopSize can
@@ -74,6 +85,7 @@ signals:
     // when a stopped AVD session host VM is booted automatically ("Starting your VM. It
     // may take up to 5 minutes.").
     void sessionReconnecting(const QString& what, int attempt, int maxAttempts);
+    void aadTokenProviderChanged();
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
@@ -143,6 +155,8 @@ private:
     std::unique_ptr<RdpSession> m_session;
     AadWebAuthenticator m_aadAuth;
     AadTokenProvider* m_aadTokenProvider = nullptr; // not owned
+    QObject* m_aadTokenProviderObject = nullptr;    // the same object, for the QML property
+    int m_preventSessionLockSeconds = 0;
     RdstlsCredentialDialog m_rdstlsPrompt;
     CertificateTrustDialog m_certPrompt;
     // Authoritative source of the desktop's dimensions (set by onDesktopResized). Empty

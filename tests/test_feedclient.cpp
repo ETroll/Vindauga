@@ -13,11 +13,18 @@ private slots:
         QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://www.wvd.microsoft.com/x.rdp?hash=1"))));
         QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://login.microsoftonline.com/"))));
         QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://MICROSOFT.com/"))));
+        // Sovereign clouds.
+        QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://rdweb.wvd.azure.us/api/arm/feeddiscovery"))));
+        QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://rdweb.wvd.azure.cn/api/arm/feeddiscovery"))));
+        QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://login.microsoftonline.us/"))));
+        QVERIFY(FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://login.chinacloudapi.cn/"))));
     }
 
     void rejectsLookalikesAndPlainHttp() {
         QVERIFY(!FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://evilmicrosoft.com/"))));
         QVERIFY(!FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://microsoft.com.evil.io/"))));
+        QVERIFY(!FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://notazure.us/"))));
+        QVERIFY(!FeedClient::isTrustedUrl(QUrl(QStringLiteral("https://azure.us.evil.io/"))));
         QVERIFY(!FeedClient::isTrustedUrl(QUrl(QStringLiteral("http://rdweb.wvd.microsoft.com/"))));
         QVERIFY(!FeedClient::isTrustedUrl(QUrl()));
         QVERIFY(!FeedClient::isTrustedUrl(QUrl(QStringLiteral("not a url"))));

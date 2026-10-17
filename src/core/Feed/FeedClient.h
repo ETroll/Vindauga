@@ -23,13 +23,18 @@ public:
     };
 
     // discoveryUrl defaults to the public cloud; sovereign clouds use another host.
-    explicit FeedClient(QUrl discoveryUrl = defaultDiscoveryUrl());
+    // userAgent is sent as both User-Agent and X-MS-User-Agent (see FeedClient.cpp); the
+    // feed service rejects clients it does not recognise.
+    explicit FeedClient(QUrl discoveryUrl = defaultDiscoveryUrl(),
+                        QByteArray userAgent = defaultUserAgent());
 
-    static QUrl defaultDiscoveryUrl();
+    static QUrl defaultDiscoveryUrl();     // VINDAUGA_FEED_DISCOVERY_URL or the public cloud
+    static QByteArray defaultUserAgent();  // VINDAUGA_FEED_USER_AGENT or the built-in string
 
-    // A bearer token is only ever attached to https URLs on Microsoft hosts (the feed XML
-    // supplies the feed, .rdp and icon URLs, so they are checked first). Dot-boundary
-    // match: "evilmicrosoft.com" and "microsoft.com.evil.io" are rejected.
+    // A bearer token is only ever attached to https URLs on Microsoft hosts, public or
+    // sovereign cloud (the feed XML supplies the feed, .rdp and icon URLs, so they are
+    // checked first). Dot-boundary match: "evilmicrosoft.com" and "microsoft.com.evil.io"
+    // are rejected.
     static bool isTrustedUrl(const QUrl& url);
 
     Enumeration enumerate(const QString& accessToken) const;
@@ -42,6 +47,7 @@ private:
                    QString* error) const;
 
     QUrl m_discoveryUrl;
+    QByteArray m_userAgent;
 };
 
 } // namespace vindauga

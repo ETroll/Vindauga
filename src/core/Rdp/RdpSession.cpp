@@ -16,6 +16,7 @@
 #include <freerdp/client/disp.h>
 #include <freerdp/client/file.h>
 #include <freerdp/codec/color.h>
+#include <freerdp/error.h>
 #include <freerdp/freerdp.h>
 #include <freerdp/gdi/gdi.h>
 #include <freerdp/graphics.h>
@@ -704,6 +705,12 @@ BOOL vindaugaPostConnect(freerdp* instance) {
 // completed earlier in the sequence) are not re-run, so there are no repeated prompts.
 // Returns milliseconds to wait before the next attempt, or -1 to give up (FreeRDP then
 // treats it as a final failure, as if no callback were registered).
+// Mid-session reconnect (see runConnectionLoop): attempts and the pause between them.
+// 20 x 5 s = 100 s covers a Wi-Fi roam, a VPN re-key or a laptop resume without being
+// so long that a genuinely dead link keeps the spinner up for ages.
+constexpr UINT32 kReconnectMaxAttempts = 20;
+constexpr DWORD kReconnectDelayMs = 5000;
+
 SSIZE_T vindaugaRetryDialog(freerdp* instance, const char* what, size_t current, void* /*userarg*/) {
     constexpr size_t kMaxAttempts = 20;   // ~20 x 15 s = 5 min, matching Azure's "up to 5 minutes"
     constexpr SSIZE_T kDelayMs = 15000;
@@ -921,6 +928,16 @@ RdpSession::RdpSession(QString rdpText, QString aadToken, QObject* parent)
     // TODO: re-enable once FreeRDP >= 3.31.1 is the minimum supported version.
     freerdp_settings_set_bool(context->settings, FreeRDP_RedirectClipboard, FALSE);
 
+    // Auto-reconnect: announces support for the server's reconnect cookie (the session is
+    // resumed rather than logged on again) and lets runConnectionLoop() retry after a
+    // network drop instead of ending the session with an error card. The .rdp files the
+    // feed serves do not set "autoreconnection enabled", so it is forced on here.
+    // Compression (FreeRDP_CompressionEnabled, RDP 6.1 bulk compression) is already on by
+    // default in libfreerdp 3 and needs no change.
+    freerdp_settings_set_bool(context->settings, FreeRDP_AutoReconnectionEnabled, TRUE);
+    freerdp_settings_set_uint32(context->settings, FreeRDP_AutoReconnectMaxRetries,
+                                kReconnectMaxAttempts);
+
     // gdi_init() is deliberately not called here; see vindaugaPostConnect. A session may
     // be constructed without ever connecting (e.g. in tests), and Impl::~Impl()'s
     // gdi_free() is null-safe whether or not gdi_init ever ran.
@@ -979,6 +996,15 @@ void RdpSession::setAadTokenProvider(AadTokenProvider* provider) {
     m_impl->aadTokenProvider = provider;
 }
 
+void RdpSession::setPreventSessionLockSeconds(int seconds) {
+    if (!m_impl->context)
+        return;
+    const UINT32 interval = seconds > 0 ? static_cast<UINT32>(seconds) : 0;
+    freerdp_settings_set_uint32(m_impl->context->settings, FreeRDP_FakeMouseMotionInterval,
+                                interval);
+    qCDebug(lcRdp) << "FakeMouseMotionInterval set to" << interval << "s";
+}
+
 AadTokenProvider* RdpSession::aadTokenProvider() const {
     return m_impl->aadTokenProvider;
 }
@@ -1025,6 +1051,76 @@ void RdpSession::stop() {
     freerdp_abort_connect_context(m_impl->context);
 }
 
+// Mirrors the gating in libfreerdp's client_auto_reconnect_ex(): only a network-level
+// drop is worth retrying. A server-side logoff/disconnect arrives as an error info PDU
+// (freerdp_error_info != 0, apart from the GRAPHICS_SUBSYSTEM_FAILED code that marks a
+// server-side crash), credential failures must go back to the user, and a cancel from
+// stop() must end the session.
+bool RdpSession::shouldAutoReconnect() const {
+    rdpContext* context = m_impl->context;
+    if (freerdp_shall_disconnect_context(context))
+        return false;
+    if (!freerdp_settings_get_bool(context->settings, FreeRDP_AutoReconnectionEnabled))
+        return false;
+    const UINT32 errorInfo = freerdp_error_info(context->instance);
+    if (errorInfo != ERRINFO_SUCCESS && errorInfo != ERRINFO_GRAPHICS_SUBSYSTEM_FAILED) {
+        qCInfo(lcRdp) << "Not reconnecting: server reported"
+                      << freerdp_get_error_info_string(errorInfo);
+        return false;
+    }
+    switch (freerdp_get_last_error(context)) {
+    case FREERDP_ERROR_CONNECT_LOGON_FAILURE:
+    case FREERDP_ERROR_CONNECT_CLIENT_REVOKED:
+    case FREERDP_ERROR_CONNECT_WRONG_PASSWORD:
+    case FREERDP_ERROR_CONNECT_ACCESS_DENIED:
+    case FREERDP_ERROR_CONNECT_ACCOUNT_RESTRICTION:
+    case FREERDP_ERROR_CONNECT_ACCOUNT_LOCKED_OUT:
+    case FREERDP_ERROR_CONNECT_ACCOUNT_EXPIRED:
+    case FREERDP_ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS:
+    case FREERDP_ERROR_CONNECT_CANCELLED:
+        qCInfo(lcRdp) << "Not reconnecting:"
+                      << freerdp_get_last_error_name(freerdp_get_last_error(context));
+        return false;
+    default:
+        return true;
+    }
+}
+
+// Our own retry loop rather than client_auto_reconnect_ex(): that helper sleeps through
+// its whole retry delay, so an "End session" click during a reconnect would block the
+// thread join in ~RdpSession() for the remainder of the delay. Waiting on FreeRDP's own
+// abort event instead makes stop() take effect immediately. freerdp_reconnect() re-runs
+// the gateway/AAD and RDSTLS callbacks, which are silent when a token provider and the
+// keychain are in place, and reuses the server's reconnect cookie so the Windows session
+// is resumed, not logged on again.
+bool RdpSession::reconnect() {
+    rdpContext* context = m_impl->context;
+    freerdp* instance = context->instance;
+    HANDLE abortEvent = freerdp_abort_event(context);
+    for (UINT32 attempt = 1; attempt <= kReconnectMaxAttempts; ++attempt) {
+        qCWarning(lcRdp) << "Connection lost; reconnect attempt" << attempt << "of"
+                         << kReconnectMaxAttempts;
+        notifyReconnecting(QStringLiteral("Connection lost, reconnecting"),
+                           static_cast<int>(attempt), static_cast<int>(kReconnectMaxAttempts));
+        if (freerdp_reconnect(instance))
+            return true;
+        if (freerdp_get_last_error(context) == FREERDP_ERROR_CONNECT_CANCELLED ||
+            freerdp_shall_disconnect_context(context)) {
+            qCInfo(lcRdp) << "Reconnect cancelled";
+            return false;
+        }
+        qCDebug(lcRdp) << "Reconnect attempt failed:"
+                       << freerdp_get_last_error_string(freerdp_get_last_error(context));
+        // Pause, but wake up at once if stop() signals the abort event meanwhile.
+        if (abortEvent && WaitForSingleObject(abortEvent, kReconnectDelayMs) == WAIT_OBJECT_0)
+            return false;
+        if (!abortEvent)
+            Sleep(kReconnectDelayMs);
+    }
+    qCWarning(lcRdp) << "Giving up reconnecting after" << kReconnectMaxAttempts << "attempts";
+    return false;
+}
+
 void RdpSession::runConnectionLoop() {
     rdpContext* context = m_impl->context;
     freerdp* instance = context->instance;
@@ -1048,31 +1144,43 @@ void RdpSession::runConnectionLoop() {
     // only `this`, which outlives this runConnectionLoop() call.
     setDecodeFailureCallback([this]() { onDecodeFailureDetected(); });
 
-    while (!freerdp_shall_disconnect_context(context)) {
-        // WinPR's WaitForMultipleObjects never accepts more than MAXIMUM_WAIT_OBJECTS=64
-        // handles (otherwise WAIT_FAILED, and the loop and hence the session dies).
-        // Reserve one slot for wakeEvent by asking freerdp_get_event_handles for at most
-        // 63.
-        HANDLE handles[MAXIMUM_WAIT_OBJECTS];
-        DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 1);
-        if (count == 0) {
-            qCWarning(lcRdp) << "freerdp_get_event_handles returned 0 handles";
-            break;
-        }
-        if (m_impl->wakeEvent)
-            handles[count++] = m_impl->wakeEvent;
-        const DWORD status = WaitForMultipleObjects(count, handles, FALSE, 100);
-        if (status == WAIT_FAILED) {
-            qCWarning(lcRdp) << "WaitForMultipleObjects failed";
-            break;
-        }
-        if (!freerdp_check_event_handles(context))
-            break;
+    for (;;) {
+        bool transportFailed = false;
+        while (!freerdp_shall_disconnect_context(context)) {
+            // WinPR's WaitForMultipleObjects never accepts more than MAXIMUM_WAIT_OBJECTS=64
+            // handles (otherwise WAIT_FAILED, and the loop and hence the session dies).
+            // Reserve one slot for wakeEvent by asking freerdp_get_event_handles for at
+            // most 63.
+            HANDLE handles[MAXIMUM_WAIT_OBJECTS];
+            DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 1);
+            if (count == 0) {
+                qCWarning(lcRdp) << "freerdp_get_event_handles returned 0 handles";
+                break;
+            }
+            if (m_impl->wakeEvent)
+                handles[count++] = m_impl->wakeEvent;
+            const DWORD status = WaitForMultipleObjects(count, handles, FALSE, 100);
+            if (status == WAIT_FAILED) {
+                qCWarning(lcRdp) << "WaitForMultipleObjects failed";
+                break;
+            }
+            if (!freerdp_check_event_handles(context)) {
+                transportFailed = true;
+                break;
+            }
 
-        // Input slots and requestResize are delivered as queued slot calls from the UI
-        // thread. This loop blocks for the whole session, so Qt's own exec() never runs
-        // until we return; pump the event queue here so those calls get delivered.
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+            // Input slots and requestResize are delivered as queued slot calls from the
+            // UI thread. This loop blocks for the whole session, so Qt's own exec() never
+            // runs until we return; pump the event queue here so those calls get
+            // delivered.
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+        }
+        if (!transportFailed || !shouldAutoReconnect())
+            break;
+        if (!reconnect())
+            break;
+        qCInfo(lcRdp) << "Reconnected.";
+        emit connected();
     }
 
     // Remove the listener before the rest of the cleanup: a late WLog line from the

@@ -38,11 +38,35 @@ public:
     int frameBufferMs() const;
     void setFrameBufferMs(int value);
 
+    // Seconds between the synthetic mouse movements FreeRDP sends while the user is idle
+    // (FreeRDP_FakeMouseMotionInterval, "/prevent-session-lock" in xfreerdp), so neither
+    // the AVD gateway's idle timeout nor the Windows lock screen kicks in during a long
+    // read or meeting. 0 (default) = off, since an organisation's lock-screen policy is
+    // theirs to set; clamped to [0, 3600].
+    int preventSessionLockSeconds() const;
+    void setPreventSessionLockSeconds(int value);
+
+    // Feed discovery endpoint. Empty (default) = FeedClient::defaultDiscoveryUrl(), the
+    // public Azure cloud; sovereign clouds (Azure Government, China) use another host.
+    QString feedDiscoveryUrl() const;
+    void setFeedDiscoveryUrl(QString value);
+
+    // User-Agent for the Entra sign-in web view and token requests. Empty (default) =
+    // the embedded browser's own string (Chromium on Linux). Some Conditional Access
+    // policies only admit particular platforms or browsers, which they recognise from
+    // this header; the value is applied to both the web view and AuthManager so a
+    // sign-in is evaluated consistently.
+    QString signInUserAgent() const;
+    void setSignInUserAgent(QString value);
+
 signals:
     void useDisplayScaleFactorChanged();
     void hardwareVideoDecodingChanged();
     void preferredVaapiDeviceChanged();
     void frameBufferMsChanged();
+    void preventSessionLockSecondsChanged();
+    void feedDiscoveryUrlChanged();
+    void signInUserAgentChanged();
 
 private:
     QString m_path;

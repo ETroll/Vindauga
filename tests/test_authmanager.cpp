@@ -57,6 +57,41 @@ private slots:
         QVERIFY(!url.toString(QUrl::FullyEncoded).contains(QLatin1Char('+')));
     }
 
+    void explainsKnownAuthErrors() {
+        const QString frequency = AuthManager::explainAuthError(
+            QStringLiteral("invalid_grant: AADSTS70043: The refresh token has expired due to sign-in frequency"));
+        QVERIFY(frequency.contains(QStringLiteral("sign in again")));
+        QVERIFY(frequency.contains(QStringLiteral("AADSTS70043")));
+
+        const QString inactivity = AuthManager::explainAuthError(
+            QStringLiteral("invalid_grant: AADSTS700082: The refresh token has expired due to inactivity"));
+        QVERIFY(inactivity.contains(QStringLiteral("inactivity")));
+
+        const QString ca = AuthManager::explainAuthError(
+            QStringLiteral("invalid_grant: AADSTS53003: Access has been blocked by Conditional Access policies"));
+        QVERIFY(ca.contains(QStringLiteral("Conditional Access")));
+
+        QVERIFY(AuthManager::explainAuthError(QStringLiteral("network error: Host not found"))
+                    .contains(QStringLiteral("network")));
+        // Unknown errors pass through unchanged, empty stays empty.
+        QCOMPARE(AuthManager::explainAuthError(QStringLiteral("something odd")),
+                 QStringLiteral("something odd"));
+        QVERIFY(AuthManager::explainAuthError(QString()).isEmpty());
+    }
+
+    void cacheKeyIgnoresScopeOrderButNotReqCnf() {
+        const QString feed = AuthManager::feedScopeEncoded();
+        const QString freerdp = QStringLiteral(
+            "https%3A%2F%2Fwww.wvd.microsoft.com%2F.default%20openid%20profile%20offline_access");
+        QCOMPARE(AuthManager::cacheKey(feed, QString()), AuthManager::cacheKey(freerdp, QString()));
+        QVERIFY(AuthManager::cacheKey(feed, QString()) !=
+                AuthManager::cacheKey(QStringLiteral("other%20scope"), QString()));
+        QVERIFY(AuthManager::cacheKey(feed, QStringLiteral("key1")) !=
+                AuthManager::cacheKey(feed, QStringLiteral("key2")));
+        QVERIFY(AuthManager::cacheKey(feed, QStringLiteral("key1")) !=
+                AuthManager::cacheKey(feed, QString()));
+    }
+
     void feedScopeIsPercentEncoded() {
         QCOMPARE(AuthManager::feedScopeEncoded(),
                  QStringLiteral("https%3A%2F%2Fwww.wvd.microsoft.com%2F.default%20offline_access%20openid%20profile"));

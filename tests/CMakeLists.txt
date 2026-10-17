@@ -15,6 +15,14 @@ qt_add_executable(test_feedclient test_feedclient.cpp)
 target_link_libraries(test_feedclient PRIVATE vindauga_core Qt6::Test Qt6::Core)
 add_test(NAME feedclient COMMAND test_feedclient)
 
+qt_add_executable(test_feedcache test_feedcache.cpp)
+target_link_libraries(test_feedcache PRIVATE vindauga_core Qt6::Test Qt6::Core)
+add_test(NAME feedcache COMMAND test_feedcache)
+
+qt_add_executable(test_appsettings test_appsettings.cpp)
+target_link_libraries(test_appsettings PRIVATE vindauga_core Qt6::Test Qt6::Core)
+add_test(NAME appsettings COMMAND test_appsettings)
+
 qt_add_executable(test_connectionstore test_connectionstore.cpp)
 target_link_libraries(test_connectionstore PRIVATE vindauga_core Qt6::Test Qt6::Core)
 target_compile_definitions(test_connectionstore PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

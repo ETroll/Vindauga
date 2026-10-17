@@ -1,5 +1,6 @@
 #pragma once
 #include <QDateTime>
+#include <QHash>
 #include <QJsonObject>
 #include <QMutex>
 #include <QObject>
@@ -25,6 +26,11 @@
 //     (Entra refresh tokens are multi-resource), with FreeRDP's proof-of-possession key
 //     passed through as req_cnf.
 //
+// Access tokens are cached per scope (and per req_cnf key, since a proof-of-possession
+// token is bound to one key) until a minute before expiry, so a reconnect or a second
+// connection does not cost another refresh grant. Every refresh grant rotates the
+// refresh token (one keychain write), which is the real cost being avoided.
+//
 // Network calls are synchronous (a nested QEventLoop around QNetworkAccessManager, the
 // same pattern as CredentialStore) and may be made from any thread with an event
 // dispatcher; token state is guarded by a mutex. Never logs tokens, only lengths.
@@ -39,13 +45,14 @@ public:
     ~AuthManager() override;
 
     // Opens the Microsoft sign-in in `auth` and blocks until the token exchange is done.
-    // On success the refresh token is stored in the keychain. `connectionKey`/`loginHint`
-    // are optional: the UPN pre-selects the account in the picker.
+    // On success the refresh token is stored in the keychain. The UPN from a previous
+    // sign-in is passed as login_hint so the account picker is skipped.
     bool signInInteractive(AadInteractiveAuth& auth, QString* error = nullptr);
 
     // Refresh-token grant from the keychain-stored token. False (with `error`) when no
     // token is stored or the tenant refuses the refresh (e.g. AADSTS70043, a Conditional
     // Access sign-in frequency policy), in which case signInInteractive() is required.
+    // `error` is the raw "<code>: <description>" text; see explainAuthError().
     bool signInSilently(QString* error = nullptr);
 
     bool hasStoredRefreshToken() const;
@@ -57,10 +64,23 @@ public:
     QDateTime feedTokenExpiresAt() const;
     QString userPrincipalName() const; // from the id_token; empty until signed in
 
+    // Optional User-Agent for the token endpoint requests. Some Conditional Access
+    // policies evaluate the client platform from it; the same string should then be set
+    // on the sign-in web view (AadWebAuthenticator) so both halves of a sign-in agree.
+    // Empty (default) leaves Qt's default.
+    void setUserAgent(const QString& userAgent);
+
     // AadTokenProvider
     QString acquireAccessToken(const QString& scopeEncoded, const QString& reqCnf) override;
 
+    // Turns a token-endpoint error ("AADSTS70043: ...", "invalid_grant: ...", "network
+    // error: ...") into a sentence a user can act on. Unknown errors are returned as is.
+    static QString explainAuthError(const QString& error);
+
     // Building blocks, public for tests.
+    // Cache key for an access token: the scope words sorted (order is irrelevant to
+    // Entra) plus the req_cnf key, if any.
+    static QString cacheKey(const QString& scopeEncoded, const QString& reqCnf);
     static QJsonObject decodeJwtPayload(const QString& jwt); // empty object on malformed input
     static QString pkceChallenge(const QString& verifier);  // S256, base64url without padding
     QUrl buildAuthorizeUrl(const QString& codeChallenge, const QString& state,
@@ -83,19 +103,26 @@ private:
         QString idToken;
         int expiresIn = 0;
     };
+    struct CachedToken {
+        QString token;
+        QDateTime expiresAt;
+    };
+    QString cachedToken(const QString& key) const; // empty when absent or about to expire
     QUrl tokenEndpoint() const;
     TokenResponse postTokenRequest(const QByteArray& formBody) const; // blocking
-    // refresh_token grant with the current refresh token; stores a rotated refresh token.
+    // refresh_token grant with the current refresh token; stores a rotated refresh token
+    // and caches the access token under cacheKey(scopeEncoded, reqCnf).
     TokenResponse refreshGrant(const QString& scopeEncoded, const QString& reqCnf);
     // Stores the tokens from a successful response. `generation` is the value of
     // m_generation read before the network request; if signOut() has bumped it since,
     // the response is discarded and nothing is persisted (a sign-out must not be undone by
     // a grant that was in flight). Returns whether the tokens were adopted.
-    bool adoptTokens(const TokenResponse& response, bool forFeed, quint64 generation);
+    bool adoptTokens(const TokenResponse& response, const QString& cacheKey, quint64 generation);
     quint64 currentGeneration() const;
 
     QString m_clientId;
     QString m_tenant;
+    QString m_loginHost; // "https://login.microsoftonline.com" unless overridden
     CredentialStore m_store;
 
     // Two locks. m_mutex is the cheap field lock (never held across I/O). m_opMutex
@@ -108,9 +135,9 @@ private:
     mutable QRecursiveMutex m_opMutex;
     quint64 m_generation = 0; // bumped by signOut(); see adoptTokens
     QString m_refreshToken;
-    QString m_feedAccessToken;
-    QDateTime m_feedExpiresAt;
+    QHash<QString, CachedToken> m_tokens; // access tokens by cacheKey()
     QString m_upn;
+    QString m_userAgent;
 };
 
 } // namespace vindauga
