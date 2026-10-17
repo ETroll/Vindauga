@@ -24,6 +24,10 @@ public:
     void save(const QString& key, const QString& username, const QString& password) const;
     void remove(const QString& key) const;
 
+    // Generic single secret under `key` (e.g. the Entra refresh token). Empty when absent.
+    QString loadText(const QString& key) const;
+    void saveText(const QString& key, const QString& text) const;
+
 private:
     QString m_service;
 };

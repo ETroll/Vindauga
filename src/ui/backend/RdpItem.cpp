@@ -42,6 +42,10 @@ RdpItem::RdpItem(QQuickItem* parent) : QQuickItem(parent) {
 
 RdpItem::~RdpItem() = default;
 
+void RdpItem::setAadTokenProvider(AadTokenProvider* provider) {
+    m_aadTokenProvider = provider;
+}
+
 void RdpItem::connectToSession(const QString& rdpText, const QString& connectionId) {
     if (m_session) {
         // Allow reusing the same RdpItem for a retry, but only once the previous session
@@ -72,6 +76,8 @@ void RdpItem::connectToSession(const QString& rdpText, const QString& connection
         return;
     }
     m_session->setAadInteractiveAuth(&m_aadAuth);
+    if (m_aadTokenProvider)
+        m_session->setAadTokenProvider(m_aadTokenProvider);
     m_session->setRdstlsCredentialPrompt(&m_rdstlsPrompt);
     m_session->setCertificatePrompt(&m_certPrompt);
 

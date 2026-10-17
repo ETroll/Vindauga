@@ -57,6 +57,10 @@ public:
     // called while a session is still connected.
     Q_INVOKABLE void connectToSession(const QString& rdpText, const QString& connectionId = QString());
 
+    // Optional silent token source handed to every session created by connectToSession
+    // (see RdpSession::setAadTokenProvider). Not owned; nullptr (default) disables it.
+    void setAadTokenProvider(AadTokenProvider* provider);
+
     // Called by the scene graph on the GUI thread during the sync phase (the render
     // thread is blocked until sync is done), so m_pendingRenderPatches/m_desktopSize can
     // be handed to RdpRenderNode::setContent() without locking; see the threading
@@ -138,6 +142,7 @@ private:
 
     std::unique_ptr<RdpSession> m_session;
     AadWebAuthenticator m_aadAuth;
+    AadTokenProvider* m_aadTokenProvider = nullptr; // not owned
     RdstlsCredentialDialog m_rdstlsPrompt;
     CertificateTrustDialog m_certPrompt;
     // Authoritative source of the desktop's dimensions (set by onDesktopResized). Empty

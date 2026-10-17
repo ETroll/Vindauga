@@ -6,6 +6,9 @@ set(VINDAUGA_CORE_SOURCES
     Models.h
     Feed/FeedParser.h
     Feed/FeedParser.cpp
+    Feed/FeedClient.h
+    Feed/FeedClient.cpp
+    Auth/AadTokenProvider.h
     Auth/AuthManager.h
     Auth/AuthManager.cpp
     Auth/CredentialStore.h
@@ -32,8 +35,10 @@ endif()
 
 qt_add_library(vindauga_core STATIC ${VINDAUGA_CORE_SOURCES})
 
-# NetworkAuth is used by AuthManager and Qt6Keychain by CredentialStore; neither pulls in
-# Qt Quick/GUI. QDesktopServices is deliberately avoided (see AuthManager.cpp).
+# Qt6Keychain is used by CredentialStore; it does not pull in Qt Quick/GUI. NetworkAuth is
+# no longer used by AuthManager (hand-rolled auth-code + PKCE over QNetworkAccessManager,
+# since the redirect is captured by a web view rather than a loopback server) and is kept
+# only until the packaging scripts stop bundling it.
 target_link_libraries(vindauga_core PUBLIC Qt6::Core Qt6::Network Qt6::NetworkAuth Qt6Keychain::Qt6Keychain)
 target_include_directories(vindauga_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(vindauga_core PUBLIC VINDAUGA_VERSION="${PROJECT_VERSION}")

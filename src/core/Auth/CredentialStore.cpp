@@ -66,6 +66,45 @@ void CredentialStore::save(const QString& key, const QString& username,
                         << username.size() << ")";
 }
 
+QString CredentialStore::loadText(const QString& key) const {
+    if (key.isEmpty())
+        return {};
+
+    QKeychain::ReadPasswordJob job(m_service);
+    job.setKey(key);
+
+    QEventLoop loop;
+    QObject::connect(&job, &QKeychain::Job::finished, &loop, &QEventLoop::quit);
+    job.start();
+    loop.exec();
+
+    if (job.error() != QKeychain::NoError) {
+        if (job.error() != QKeychain::EntryNotFound)
+            qCWarning(lcAuth) << "Failed to read from keychain:" << job.errorString();
+        return {};
+    }
+    return job.textData();
+}
+
+void CredentialStore::saveText(const QString& key, const QString& text) const {
+    if (key.isEmpty())
+        return;
+
+    QKeychain::WritePasswordJob job(m_service);
+    job.setKey(key);
+    job.setTextData(text);
+
+    QEventLoop loop;
+    QObject::connect(&job, &QKeychain::Job::finished, &loop, &QEventLoop::quit);
+    job.start();
+    loop.exec();
+
+    if (job.error() != QKeychain::NoError)
+        qCWarning(lcAuth) << "Failed to write to keychain:" << job.errorString();
+    else
+        qCDebug(lcAuth) << "Saved secret to keychain (length" << text.size() << ")";
+}
+
 void CredentialStore::remove(const QString& key) const {
     if (key.isEmpty())
         return;

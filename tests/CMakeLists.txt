@@ -7,6 +7,14 @@ target_link_libraries(test_feedparser PRIVATE vindauga_core Qt6::Test Qt6::Core)
 target_compile_definitions(test_feedparser PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME feedparser COMMAND test_feedparser)
 
+qt_add_executable(test_authmanager test_authmanager.cpp)
+target_link_libraries(test_authmanager PRIVATE vindauga_core Qt6::Test Qt6::Core)
+add_test(NAME authmanager COMMAND test_authmanager)
+
+qt_add_executable(test_feedclient test_feedclient.cpp)
+target_link_libraries(test_feedclient PRIVATE vindauga_core Qt6::Test Qt6::Core)
+add_test(NAME feedclient COMMAND test_feedclient)
+
 qt_add_executable(test_connectionstore test_connectionstore.cpp)
 target_link_libraries(test_connectionstore PRIVATE vindauga_core Qt6::Test Qt6::Core)
 target_compile_definitions(test_connectionstore PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

@@ -12,6 +12,7 @@
 #include <memory>
 #include <utility>
 
+#include "../Auth/AadTokenProvider.h"
 #include "AadInteractiveAuth.h"
 #include "CertificatePrompt.h"
 #include "RdstlsCredentialPrompt.h"
@@ -37,6 +38,12 @@ public:
     // RdpSession; the caller must keep it alive for the session's lifetime. Without one,
     // the GetCommonAccessToken callback falls back to FreeRDP's manual stdin URL flow.
     void setAadInteractiveAuth(AadInteractiveAuth* auth);
+
+    // Registers a silent token source (typically AuthManager after a feed sign-in). Must
+    // be called before start(). Not owned by RdpSession. When set, the
+    // GetCommonAccessToken callback asks it first and only falls back to the interactive
+    // handler when it returns an empty token.
+    void setAadTokenProvider(AadTokenProvider* provider);
 
     // Registers an RDSTLS credential handler. Must be called before start(). Not owned
     // by RdpSession. Without one, AuthenticateEx(AUTH_RDSTLS) falls back to empty
@@ -168,6 +175,7 @@ public:
     // Gives the free C callbacks access to the registered AAD handler. Public for the
     // same reason as the notify* methods.
     AadInteractiveAuth* aadInteractiveAuth() const;
+    AadTokenProvider* aadTokenProvider() const;
 
     // Gives the AuthenticateEx callback access to the registered RDSTLS credential
     // handler. Public for the same reason as the notify* methods.

@@ -115,6 +115,35 @@ BOOL vindaugaGetCommonAccessToken(rdpContext* context, AccessTokenType tokenType
     }
     va_end(ap);
 
+    // Silent path first: a registered AadTokenProvider (AuthManager's refresh token from
+    // the feed sign-in) mints the token without a browser. The gateway (AVD) token uses
+    // FreeRDP's own scope setting, which matches the feed sign-in's client ID and
+    // resource; the RDSTLS (AAD) token passes FreeRDP's scope and proof-of-possession key
+    // through unchanged.
+    if (AadTokenProvider* provider = self ? self->aadTokenProvider() : nullptr) {
+        QString providerScope;
+        if (tokenType == ACCESS_TOKEN_TYPE_AAD) {
+            providerScope = QString::fromUtf8(scope);
+        } else {
+            const char* avdScope =
+                freerdp_settings_get_string(context->settings, FreeRDP_GatewayAvdScope);
+            providerScope = QString::fromUtf8(avdScope ? avdScope : "");
+        }
+        if (!providerScope.isEmpty()) {
+            const QString silentToken = provider->acquireAccessToken(
+                providerScope, tokenType == ACCESS_TOKEN_TYPE_AAD ? QString::fromUtf8(reqCnf)
+                                                                   : QString());
+            if (!silentToken.isEmpty()) {
+                qCInfo(lcRdp) << "Access token (type" << static_cast<int>(tokenType)
+                              << ") obtained silently, length" << silentToken.size();
+                *token = _strdup(silentToken.toUtf8().constData());
+                return *token != nullptr;
+            }
+            qCInfo(lcRdp) << "Silent token acquisition failed for type"
+                          << static_cast<int>(tokenType) << "— falling back to interactive";
+        }
+    }
+
     if (!auth) {
         qCDebug(lcRdp) << "No AadInteractiveAuth registered — using FreeRDP's manual "
                           "URL paste (fallback)";
@@ -740,6 +769,7 @@ struct RdpSession::Impl {
     rdpContext* context = nullptr;
     QThread* thread = nullptr;
     AadInteractiveAuth* aadAuth = nullptr; // not owned by RdpSession
+    AadTokenProvider* aadTokenProvider = nullptr; // not owned by RdpSession
     RdstlsCredentialPrompt* rdstlsPrompt = nullptr; // not owned by RdpSession
     CertificatePrompt* certPrompt = nullptr; // not owned by RdpSession
 
@@ -943,6 +973,14 @@ void RdpSession::setAadInteractiveAuth(AadInteractiveAuth* auth) {
 
 AadInteractiveAuth* RdpSession::aadInteractiveAuth() const {
     return m_impl->aadAuth;
+}
+
+void RdpSession::setAadTokenProvider(AadTokenProvider* provider) {
+    m_impl->aadTokenProvider = provider;
+}
+
+AadTokenProvider* RdpSession::aadTokenProvider() const {
+    return m_impl->aadTokenProvider;
 }
 
 void RdpSession::setRdstlsCredentialPrompt(RdstlsCredentialPrompt* prompt) {
