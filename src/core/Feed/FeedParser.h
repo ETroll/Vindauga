@@ -5,7 +5,7 @@
 
 #include "../Models.h"
 
-// Parses feed-discovery XML (unused by the application). Pure QXmlStreamReader logic,
+// Parses feed-discovery XML (fetched by FeedClient). Pure QXmlStreamReader logic,
 // no network I/O.
 namespace vindauga {
 

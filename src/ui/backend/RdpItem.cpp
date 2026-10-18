@@ -42,6 +42,27 @@ RdpItem::RdpItem(QQuickItem* parent) : QQuickItem(parent) {
 
 RdpItem::~RdpItem() = default;
 
+void RdpItem::setAadTokenProvider(AadTokenProvider* provider) {
+    m_aadTokenProvider = provider;
+    m_aadTokenProviderObject = nullptr;
+    emit aadTokenProviderChanged();
+}
+
+QObject* RdpItem::aadTokenProviderObject() const {
+    return m_aadTokenProviderObject;
+}
+
+void RdpItem::setAadTokenProviderObject(QObject* object) {
+    if (object == m_aadTokenProviderObject)
+        return;
+    auto* provider = dynamic_cast<AadTokenProvider*>(object);
+    if (object && !provider)
+        qCWarning(lcRdp) << "aadTokenProvider object does not implement AadTokenProvider; ignoring";
+    m_aadTokenProvider = provider;
+    m_aadTokenProviderObject = provider ? object : nullptr;
+    emit aadTokenProviderChanged();
+}
+
 void RdpItem::connectToSession(const QString& rdpText, const QString& connectionId) {
     if (m_session) {
         // Allow reusing the same RdpItem for a retry, but only once the previous session
@@ -72,8 +93,11 @@ void RdpItem::connectToSession(const QString& rdpText, const QString& connection
         return;
     }
     m_session->setAadInteractiveAuth(&m_aadAuth);
+    if (m_aadTokenProvider)
+        m_session->setAadTokenProvider(m_aadTokenProvider);
     m_session->setRdstlsCredentialPrompt(&m_rdstlsPrompt);
     m_session->setCertificatePrompt(&m_certPrompt);
+    m_session->setPreventSessionLockSeconds(m_preventSessionLockSeconds);
 
     // Show the AAD web view, the RDSTLS dialog and the certificate prompt as overlays
     // inside our window rather than as separate top-level windows. Falls back to a

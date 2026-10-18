@@ -58,6 +58,7 @@ private slots:
         QCOMPARE(desktop.deviceState, QStringLiteral("Available"));
         QCOMPARE(desktop.workspaceTenantId, QStringLiteral("11111111-1111-1111-1111-111111111111"));
         QVERIFY(!desktop.iconUrl.isEmpty());
+        QVERIFY(desktop.iconPngUrl.toString().endsWith(QStringLiteral("res-hostpool04_32_0.png?geo=EU")));
         QVERIFY(!desktop.rdpFileUrl.isEmpty());
         // hash and endpointId in the query string must be preserved (required by the feed API).
         QVERIFY(desktop.rdpFileUrl.toString().contains(QStringLiteral("hash=abc123")));

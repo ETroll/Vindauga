@@ -2,7 +2,6 @@
 # via QML_ELEMENT.
 qt_add_library(vindauga_ui STATIC)
 
-# Qt6::NetworkAuth comes transitively via vindauga_core.
 target_link_libraries(vindauga_ui PUBLIC
     vindauga_core
     Qt6::Quick Qt6::Qml Qt6::QuickControls2
@@ -15,6 +14,8 @@ set(VINDAUGA_UI_SOURCES
     backend/AppController.cpp
     backend/ConnectionListModel.h
     backend/ConnectionListModel.cpp
+    backend/ResourceListModel.h
+    backend/ResourceListModel.cpp
 )
 
 # AadWebAuthenticator needs Qt6::WebEngineQuick; these sources are only built when

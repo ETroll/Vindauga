@@ -9,9 +9,17 @@ Page {
 
     signal backRequested()
 
-    Column {
+    Flickable {
         anchors.fill: parent
-        anchors.margins: 16
+        contentHeight: settingsColumn.implicitHeight + 32
+        clip: true
+        ScrollBar.vertical: ScrollBar {}
+
+    Column {
+        id: settingsColumn
+        x: 16
+        y: 16
+        width: parent.width - 32
         spacing: 16
 
         ToolButton {
@@ -147,5 +155,96 @@ Page {
                 text: qsTr("Waits this many milliseconds after the first frame in a burst before actually drawing, so more updates can arrive and be combined into one smoother draw — trading a little extra visual delay for less stutter during bursty updates (video, scrolling, opening windows). 0 = off, draw as soon as possible (default). Takes effect live, from the next burst of updates — no need to reconnect.")
             }
         }
+
+        // Synthetic mouse motion while idle (FreeRDP's /prevent-session-lock). Off by
+        // default: whether the Windows lock screen may be held off is the organisation's
+        // policy, not ours.
+        Column {
+            width: parent.width
+            spacing: 4
+
+            Row {
+                spacing: 8
+
+                Label {
+                    text: qsTr("Keep session awake every:")
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                SpinBox {
+                    id: keepAwakeSpinBox
+                    from: 0
+                    to: 3600
+                    stepSize: 30
+                    value: app.preventSessionLockSeconds
+                    onValueModified: app.preventSessionLockSeconds = value
+                }
+                Label {
+                    text: qsTr("s")
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: 0.7
+                }
+            }
+            Label {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font.pixelSize: 12
+                text: qsTr("Sends an invisible mouse movement to the session after this many seconds without input, so the gateway's idle timeout and the Windows lock screen do not kick in during a long read or a meeting. 0 = off (default). Applies to the next connection.")
+            }
+        }
+
+        // Sign-in / feed options for tenants that need them. Both empty by default.
+        Column {
+            width: parent.width
+            spacing: 4
+
+            Label {
+                text: qsTr("Sign-in and feed")
+                font.bold: true
+            }
+            Row {
+                spacing: 8
+                Label {
+                    text: qsTr("Feed discovery URL:")
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                TextField {
+                    id: discoveryUrlField
+                    width: 360
+                    text: app.feedDiscoveryUrl
+                    placeholderText: app.defaultFeedDiscoveryUrl
+                    onEditingFinished: app.feedDiscoveryUrl = text
+                }
+            }
+            Label {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font.pixelSize: 12
+                text: qsTr("Only needed for sovereign clouds (Azure Government: https://rdweb.wvd.azure.us/api/arm/feeddiscovery, Azure China: https://rdweb.wvd.azure.cn/api/arm/feeddiscovery); leave empty for the public Azure cloud. Those clouds also use their own sign-in authority, set with the VINDAUGA_LOGIN_HOST environment variable; this has not been verified against a sovereign tenant. Applies to the next refresh.")
+            }
+            Row {
+                spacing: 8
+                Label {
+                    text: qsTr("Sign-in browser identity:")
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                TextField {
+                    id: userAgentField
+                    width: 360
+                    text: app.signInUserAgent
+                    placeholderText: qsTr("Default (Chromium on Linux)")
+                    onEditingFinished: app.signInUserAgent = text
+                }
+            }
+            Label {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font.pixelSize: 12
+                text: qsTr("User-Agent string sent by the embedded sign-in browser and the token requests. Some organisations' Conditional Access policies only admit certain platforms or browsers, which they recognise from this header. Leave empty unless sign-in is blocked with a 'device platform' message. Applies to the next sign-in.")
+            }
+        }
+    }
     }
 }

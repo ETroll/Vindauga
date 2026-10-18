@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QEventLoop>
+#include <QStandardPaths>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -57,6 +58,9 @@ class AadWebAuthenticatorTest : public QObject {
     Q_OBJECT
 private slots:
     void initTestCase() {
+        // The sign-in view uses a persistent on-disk profile (AadWebAuthenticator::
+        // signInProfile); test mode keeps it under ~/.qttest instead of the real data dir.
+        QStandardPaths::setTestModeEnabled(true);
         QtWebEngineQuick::initialize();
         // Same pre-check as main(): without it this test crashes (SIGTRAP, "Keymap file
         // failed to load") on X11 hosts with an invalid XKB variant in _XKB_RULES_NAMES.

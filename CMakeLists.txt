@@ -9,10 +9,10 @@ include(GNUInstallDirs)
 
 option(VINDAUGA_WITH_RDP "Link libfreerdp for RDP session support" ON)
 
-# Qt 6.9 is the real minimum: QOAuth2DeviceAuthorizationFlow (used by AuthManager) first
-# appeared in 6.9. Checking here gives a clear CMake error instead of a confusing
-# missing-header compile error.
-find_package(Qt6 6.9 REQUIRED COMPONENTS Core Network Quick Qml QuickControls2 NetworkAuth Test)
+# Qt 6.9 is the minimum the project is built and tested against (the FluentWinUI3 style
+# and the QRhi/QSGRenderNode APIs RdpRenderNode uses). Checking here gives a clear CMake
+# error instead of a confusing missing-header compile error.
+find_package(Qt6 6.9 REQUIRED COMPONENTS Core Network Quick Qml QuickControls2 Test)
 qt_standard_project_setup(REQUIRES 6.9)
 
 # Secure storage of RDSTLS credentials per saved connection (CredentialStore).

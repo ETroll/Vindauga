@@ -2,7 +2,7 @@
 #include <QString>
 #include <QUrl>
 
-// Plain data structures for the feed-discovery flow (unused by the application).
+// Plain data structures for the feed-discovery flow (see FeedClient/AuthManager).
 namespace vindauga {
 
 // One tenant/workspace from feed discovery (step 1).
@@ -21,7 +21,8 @@ struct RdpResource {
     QString type;               // "Desktop" | "RemoteApp"
     QString deviceState;        // "Available" ...
     QUrl    rdpFileUrl;         // ResourceFile/@URL (do not modify the query; hash+endpointId are required)
-    QUrl    iconUrl;            // IconRaw/@FileURL (optional)
+    QUrl    iconUrl;            // IconRaw/@FileURL (optional, .ico)
+    QUrl    iconPngUrl;         // Icon32/@FileURL (optional, 32x32 PNG; easier to show)
     QString workspaceTenantId;  // Workspace this resource came from
 };
 

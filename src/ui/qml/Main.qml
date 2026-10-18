@@ -11,6 +11,9 @@ ApplicationWindow {
 
     AppController { id: app }
 
+    // The sign-in web view is overlaid on this window rather than opened separately.
+    Component.onCompleted: app.setHostWindow(root)
+
     StackView {
         id: stack
         anchors.fill: parent
@@ -21,6 +24,7 @@ ApplicationWindow {
         id: connectionsPageComponent
         ConnectionsPage {
             onConnectionOpened: (id) => app.openConnection(id)
+            onResourceOpened: (id) => app.openResource(id)
             onSettingsRequested: stack.push(settingsPageComponent)
         }
     }

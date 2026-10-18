@@ -127,7 +127,7 @@ jobs:
           # qtshadertools: separate add-on module, needed for qt6_add_shaders()/qsb
           # (compiled shaders in the RDP render node); see the matching comment in ci.yml.
           python3 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
-            -m qtnetworkauth qtwebengine qtwebchannel qtpositioning qtshadertools \
+            -m qtwebengine qtwebchannel qtpositioning qtshadertools \
             -O "${{ github.workspace }}/qt"
       - name: Build .deb (packaging/deb/build-deb.sh)
         run: |

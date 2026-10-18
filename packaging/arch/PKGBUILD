@@ -18,7 +18,6 @@ license=('MIT')
 depends=(
     'qt6-base'
     'qt6-declarative'
-    'qt6-networkauth'
     'qt6-webengine'
     'qtkeychain-qt6'
     'freerdp'

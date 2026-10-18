@@ -51,6 +51,12 @@ Page {
         // Live binding: RdpItem re-reads this for every burst of frames, so a change
         // takes effect from the next burst.
         frameBufferMs: app.frameBufferMs
+        // Applied to the session at connect time (see RdpSession).
+        preventSessionLockSeconds: app.preventSessionLockSeconds
+        // Silent tokens at connect time (gateway and, with enablerdsaadauth, the session
+        // host) from the feed sign-in. Null when not signed in; RdpItem then falls back
+        // to the web view as before.
+        aadTokenProvider: app.signedIn ? app.auth : null
         onSessionConnected: {
             page.sessionActive = true
             page.reconnectingText = ""
@@ -66,6 +72,10 @@ Page {
         // maxAttempts <= 1 means FreeRDP gave no meaningful cap, so omit the "(x/y)" suffix.
         onSessionReconnecting: (what, attempt, maxAttempts) => {
             page.reconnectingText = maxAttempts > 1 ? (what + " (" + attempt + "/" + maxAttempts + ")") : what
+            // A mid-session reconnect (RdpSession's auto-reconnect after a network drop)
+            // arrives while sessionActive is still true; drop it so the overlay with the
+            // reconnect status shows over the last frame. sessionConnected sets it again.
+            page.sessionActive = false
         }
     }
 

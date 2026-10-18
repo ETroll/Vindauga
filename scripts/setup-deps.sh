@@ -9,7 +9,7 @@ os_id=""
 case "$os_id" in
   *arch*)
     echo ">> Arch Linux detected. Installing via pacman ..."
-    sudo pacman -S --needed qt6-base qt6-declarative qt6-networkauth qt6-shadertools \
+    sudo pacman -S --needed qt6-base qt6-declarative qt6-shadertools \
                             freerdp cmake ninja pkgconf gcc
     echo ">> Done. (qtkeychain for Qt6 is also required — check: pacman -Ss keychain)"
     ;;
@@ -23,10 +23,10 @@ case "$os_id" in
                         libgl1-mesa-dev libglvnd-dev libegl1-mesa-dev libglu1-mesa-dev \
                         libxkbcommon-dev libxcb-cursor0
     echo
-    echo "!! IMPORTANT: the apt Qt6 is too old (6.4) and lacks QtNetworkAuth."
+    echo "!! IMPORTANT: the apt Qt6 is too old (6.4); Vindauga needs Qt 6.9 or newer."
     echo "!! Install Qt 6.9 alongside it (if you have not already):"
     echo "     pipx install aqtinstall"
-    echo "     aqt install-qt linux desktop 6.9.1 linux_gcc_64 -m qtnetworkauth qtshadertools -O \$HOME/Qt"
+    echo "     aqt install-qt linux desktop 6.9.1 linux_gcc_64 -m qtwebengine qtwebchannel qtpositioning qtshadertools -O \$HOME/Qt"
     echo
     echo "   Let CMake find it without passing flags every time by adding to ~/.bashrc:"
     echo "     export CMAKE_PREFIX_PATH=\"\$HOME/Qt/6.9.1/gcc_64\""

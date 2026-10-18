@@ -54,6 +54,8 @@ QList<RdpResource> FeedParser::parseWebFeed(const QByteArray& xml, const QString
                 inResource = true;
             } else if (inResource && elementName == QLatin1String("IconRaw")) {
                 current.iconUrl = QUrl(reader.attributes().value(QLatin1String("FileURL")).toString());
+            } else if (inResource && elementName == QLatin1String("Icon32")) {
+                current.iconPngUrl = QUrl(reader.attributes().value(QLatin1String("FileURL")).toString());
             } else if (inResource && elementName == QLatin1String("ResourceFile")) {
                 const auto attrs = reader.attributes();
                 if (attrs.value(QLatin1String("FileExtension")) == QLatin1String(".rdp"))
