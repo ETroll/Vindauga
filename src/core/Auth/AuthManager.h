@@ -118,6 +118,14 @@ private:
     // the response is discarded and nothing is persisted (a sign-out must not be undone by
     // a grant that was in flight). Returns whether the tokens were adopted.
     bool adoptTokens(const TokenResponse& response, const QString& cacheKey, quint64 generation);
+    // Writes a rotated refresh token to the keychain unless a signOut() has bumped
+    // m_generation since `generation` (then nothing is written, and a write that raced a
+    // sign-out is undone). Runs on this object's (main) thread; adoptTokens posts it here
+    // when called from a worker thread. Returns whether the token is now persisted.
+    bool persistRefreshToken(const QString& refreshToken, quint64 generation);
+    // Writes m_pendingPersist (if any) via persistRefreshToken. Queued to the main thread
+    // by adoptTokens and called synchronously by the destructor.
+    void flushPendingPersist();
     quint64 currentGeneration() const;
 
     QString m_clientId;
@@ -126,15 +134,25 @@ private:
     CredentialStore m_store;
 
     // Two locks. m_mutex is the cheap field lock (never held across I/O). m_opMutex
-    // serialises every state transition that involves the keychain (adoptTokens,
-    // refreshGrant's keychain load, signInInteractive's clear, signOut) so that a
-    // sign-out cannot interleave with a grant's persistence step; network requests run
-    // outside both. Recursive because CredentialStore spins a nested QEventLoop, which on
-    // the GUI thread could re-enter this object from a timer/slot.
+    // serialises the keychain-writing transitions (adoptTokens/persistRefreshToken,
+    // signOut) so that a sign-out cannot interleave with a grant's persistence step;
+    // network requests run outside both. Recursive because CredentialStore spins a
+    // nested QEventLoop, which on the main thread can re-enter this object from a slot.
+    // Never held by a worker thread across a keychain call: the keychain runs on the main
+    // thread (CredentialStore), and the main thread may be dispatching signOut(), which
+    // takes this lock, while the worker waits for it.
     mutable QMutex m_mutex;
     mutable QRecursiveMutex m_opMutex;
     quint64 m_generation = 0; // bumped by signOut(); see adoptTokens
     QString m_refreshToken;
+    // A rotated refresh token adopted on a worker thread, waiting to be written from the
+    // main thread (see adoptTokens / flushPendingPersist). Guarded by m_mutex.
+    struct PendingPersist {
+        QString refreshToken;
+        quint64 generation = 0;
+        bool set = false;
+    };
+    PendingPersist m_pendingPersist;
     QHash<QString, CachedToken> m_tokens; // access tokens by cacheKey()
     QString m_upn;
     QString m_userAgent;

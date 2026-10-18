@@ -4,12 +4,14 @@
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaObject>
 #include <QMutexLocker>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QThread>
 #include <QUrlQuery>
 
 #include "../Logging.h"
@@ -77,7 +79,13 @@ AuthManager::AuthManager(QObject* parent)
         m_loginHost.chop(1);
 }
 
-AuthManager::~AuthManager() = default;
+AuthManager::~AuthManager() {
+    // A rotated refresh token adopted on a worker thread is persisted from the main
+    // thread's event loop; if the application is quitting before that ran, write it now
+    // (the old token may already be invalid server-side, so losing it means a fresh
+    // interactive sign-in next start).
+    flushPendingPersist();
+}
 
 QString AuthManager::clientId() const {
     return m_clientId;
@@ -273,26 +281,67 @@ bool AuthManager::adoptTokens(const TokenResponse& response, const QString& cach
             }
         }
     }
-    // Keychain I/O under m_opMutex only (m_mutex is already released): signOut() takes
-    // m_opMutex too, so it cannot delete the entry between the check above and this write.
     if (rotated) {
-        m_store.saveText(QString::fromLatin1(kRefreshTokenKey), response.refreshToken);
-        // saveText spins a nested QEventLoop; on the GUI thread a signOut() can run from
-        // inside it (m_opMutex is recursive for exactly that reason). Re-check, and undo
-        // the write if a sign-out happened meanwhile.
-        bool signedOutMeanwhile = false;
-        {
-            QMutexLocker lock(&m_mutex);
-            signedOutMeanwhile = generation != m_generation;
-        }
-        if (signedOutMeanwhile) {
-            qCInfo(lcAuth) << "Signed out while persisting the refresh token; removing it again";
-            m_store.remove(QString::fromLatin1(kRefreshTokenKey));
-            return false;
+        if (QThread::currentThread() == thread()) {
+            if (!persistRefreshToken(response.refreshToken, generation))
+                return false;
+        } else {
+            // Grants from the feed worker and from FreeRDP's connection thread must not
+            // block on the keychain: it lives on the main thread (see CredentialStore),
+            // and the main thread may be about to join this very thread (~RdpSession).
+            // Record it as pending and flush it from the main thread instead. Queued calls
+            // run in order there, so a later signOut() still ends up with the entry
+            // removed, and a sign-out that ran before the flush is caught by the
+            // generation check. The pending record (not just a queued lambda) is what
+            // lets the destructor flush a write that the event loop never got to.
+            {
+                QMutexLocker lock(&m_mutex);
+                m_pendingPersist = { response.refreshToken, generation, true };
+            }
+            QMetaObject::invokeMethod(this, &AuthManager::flushPendingPersist,
+                                      Qt::QueuedConnection);
         }
     }
     qCDebug(lcAuth) << "Token response adopted: access token length" << response.accessToken.size()
                     << "expires in" << response.expiresIn << "s, refresh token rotated:" << rotated;
+    return true;
+}
+
+void AuthManager::flushPendingPersist() {
+    PendingPersist pending;
+    {
+        QMutexLocker lock(&m_mutex);
+        pending = m_pendingPersist;
+        m_pendingPersist = {};
+    }
+    if (pending.set)
+        persistRefreshToken(pending.refreshToken, pending.generation);
+}
+
+bool AuthManager::persistRefreshToken(const QString& refreshToken, quint64 generation) {
+    // Keychain I/O under m_opMutex only (m_mutex is never held across I/O): signOut()
+    // takes m_opMutex too, so it cannot delete the entry between the check and the write.
+    QMutexLocker opLock(&m_opMutex);
+    {
+        QMutexLocker lock(&m_mutex);
+        if (generation != m_generation) {
+            qCInfo(lcAuth) << "Not persisting the refresh token: signed out meanwhile";
+            return false;
+        }
+    }
+    m_store.saveText(QString::fromLatin1(kRefreshTokenKey), refreshToken);
+    // saveText spins a nested QEventLoop; a signOut() can run from inside it (m_opMutex is
+    // recursive for exactly that reason). Re-check, and undo the write if so.
+    bool signedOutMeanwhile = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        signedOutMeanwhile = generation != m_generation;
+    }
+    if (signedOutMeanwhile) {
+        qCInfo(lcAuth) << "Signed out while persisting the refresh token; removing it again";
+        m_store.remove(QString::fromLatin1(kRefreshTokenKey));
+        return false;
+    }
     return true;
 }
 
@@ -332,12 +381,14 @@ bool AuthManager::signInInteractive(AadInteractiveAuth& auth, QString* error) {
         // another account's) must not be reused for it: clear it and leave only the
         // in-memory feed token.
         qCWarning(lcAuth) << "Token response carried no refresh token; silent sign-in will not work";
-        QMutexLocker opLock(&m_opMutex);
         {
             QMutexLocker lock(&m_mutex);
             m_refreshToken.clear();
             m_tokens.clear();
+            m_pendingPersist = {};
         }
+        // Not under m_opMutex: this runs on the sign-in worker, and remove() waits for
+        // the main thread (see refreshGrant for the deadlock this avoids).
         m_store.remove(QString::fromLatin1(kRefreshTokenKey));
     }
     if (!adoptTokens(response, cacheKey(feedScopeEncoded(), QString()), generation)) {
@@ -363,31 +414,29 @@ AuthManager::TokenResponse AuthManager::refreshGrant(const QString& scopeEncoded
     QString refreshToken;
     quint64 generation = 0;
     {
-        // Under m_opMutex so a signOut() cannot run between reading the keychain and
-        // caching its value in memory (which would resurrect a just-removed token).
-        QMutexLocker opLock(&m_opMutex);
-        {
-            QMutexLocker lock(&m_mutex);
-            refreshToken = m_refreshToken;
-            generation = m_generation;
-        }
+        QMutexLocker lock(&m_mutex);
+        refreshToken = m_refreshToken;
+        generation = m_generation;
+    }
+    if (refreshToken.isEmpty()) {
+        // No lock across the keychain read. On a worker thread loadText blocks until the
+        // main thread has run the job, and the main thread may dispatch signOut() in the
+        // meantime; holding m_opMutex here would deadlock that click. The generation check
+        // below is what keeps a sign-out from being undone: a value read before the
+        // sign-out removed it is discarded, and one read after it does not exist.
+        refreshToken = m_store.loadText(QString::fromLatin1(kRefreshTokenKey));
         if (refreshToken.isEmpty()) {
-            refreshToken = m_store.loadText(QString::fromLatin1(kRefreshTokenKey));
-            if (refreshToken.isEmpty()) {
-                TokenResponse none;
-                none.error = QStringLiteral("no refresh token stored; interactive sign-in required");
-                return none;
-            }
-            QMutexLocker lock(&m_mutex);
-            if (generation != m_generation) {
-                // A signOut() ran from inside loadText's nested event loop; the value just
-                // read is the one it removed and must not be cached.
-                TokenResponse none;
-                none.error = QStringLiteral("signed out while loading the refresh token");
-                return none;
-            }
-            m_refreshToken = refreshToken;
+            TokenResponse none;
+            none.error = QStringLiteral("no refresh token stored; interactive sign-in required");
+            return none;
         }
+        QMutexLocker lock(&m_mutex);
+        if (generation != m_generation) {
+            TokenResponse none;
+            none.error = QStringLiteral("signed out while loading the refresh token");
+            return none;
+        }
+        m_refreshToken = refreshToken;
     }
 
     QByteArray body;
@@ -427,6 +476,7 @@ void AuthManager::signOut() {
         m_refreshToken.clear();
         m_tokens.clear();
         m_upn.clear();
+        m_pendingPersist = {}; // a not-yet-flushed rotation belongs to the old sign-in
     }
     m_store.remove(QString::fromLatin1(kRefreshTokenKey));
     emit signedOut();

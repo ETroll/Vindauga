@@ -714,7 +714,13 @@ constexpr DWORD kReconnectDelayMs = 5000;
 SSIZE_T vindaugaRetryDialog(freerdp* instance, const char* what, size_t current, void* /*userarg*/) {
     constexpr size_t kMaxAttempts = 20;   // ~20 x 15 s = 5 min, matching Azure's "up to 5 minutes"
     constexpr SSIZE_T kDelayMs = 15000;
-    const QString whatStr = QString::fromUtf8(what ? what : "");
+    const QString whatRaw = QString::fromUtf8(what ? what : "");
+    // FreeRDP's `what` is an internal tag; the only one it uses today is "arm-transport"
+    // (libfreerdp/core/gateway/arm.c), which means the session host is being started.
+    // Shown to the user as the status line, with "(attempt/max)" appended by the UI.
+    const QString whatStr = whatRaw == QLatin1String("arm-transport")
+                                ? QStringLiteral("Waiting for the session host to start")
+                                : whatRaw;
     if (current >= kMaxAttempts) {
         qCWarning(lcRdp) << "RetryDialog: giving up after" << current << "attempts (" << whatStr
                          << ")";
@@ -809,9 +815,11 @@ struct RdpSession::Impl {
     // happened to be quiet. This WinPR event (the same CreateEvent/SetEvent family
     // freerdp_abort_connect_context uses for stop()) is added to the handle array so the
     // GUI thread can wake the loop immediately via RdpSession::requestWakeUp().
-    // Auto-reset (bManualReset=FALSE): only our loop waits on it, and the loop always
-    // runs processEvents() after any wake-up, so there is no reason to keep it signalled
-    // or reset it manually.
+    // Manual-reset, reset by the loop right after each wake-up. WinPR has no auto-reset
+    // events at all (CreateEvent logs "auto-reset events not yet implemented" and the
+    // handle's wait cleanup is a no-op), so an "auto-reset" event here stayed signalled
+    // after the first SetEvent and every later WaitForMultipleObjects returned at once:
+    // the loop spun at full CPU for the rest of the session.
     HANDLE wakeEvent = nullptr;
 
     // Mouse position coalescing. Move/hover events fire far more often than other input
@@ -892,7 +900,7 @@ RdpSession::RdpSession(QString rdpText, QString aadToken, QObject* parent)
 
     // See wakeEvent in Impl. Created here, once the context is known to be valid; ~Impl()
     // closes it regardless of how the constructor ends.
-    m_impl->wakeEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    m_impl->wakeEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
     if (!m_impl->wakeEvent)
         qCWarning(lcRdp) << "Failed to create wake event — input may see up to 100ms "
                              "extra latency on a quiet network";
@@ -1164,6 +1172,11 @@ void RdpSession::runConnectionLoop() {
                 qCWarning(lcRdp) << "WaitForMultipleObjects failed";
                 break;
             }
+            // Clear the wake-up before draining the event queue below: a SetEvent that
+            // lands after this reset simply wakes the next wait, and one that landed
+            // before it belongs to input that processEvents() delivers right away.
+            if (m_impl->wakeEvent)
+                ResetEvent(m_impl->wakeEvent);
             if (!freerdp_check_event_handles(context)) {
                 transportFailed = true;
                 break;

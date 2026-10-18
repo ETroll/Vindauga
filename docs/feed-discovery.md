@@ -211,6 +211,57 @@ now has `shutdown()` and the destructor keeps delivering events while joining), 
 list rejected the sovereign-cloud hosts the discovery URL setting was meant for, and a
 resource whose icon URL changed left its old icon file behind.
 
+## Fixes after the first run on a second machine
+
+Running the branch on a second machine (Qt 6.12, QtKeychain 0.17, FreeRDP 3.32) crashed
+when the desktop card was clicked. The core dump pointed at
+`QKeychain::JobExecutor::jobFinished` on the feed worker thread.
+
+### Keychain access pinned to the main thread (`CredentialStore`, `AuthManager`)
+
+QtKeychain has one process-wide job queue that is created on the thread that starts the
+first job and connects every later job to it with an automatic connection. The code
+started jobs from three threads (GUI thread for the credential dialog, feed worker for
+the silent sign-in, FreeRDP thread for the connect-time token grant). When the queue
+lived on the worker and the GUI thread ran a job, the queue's "finished" bookkeeping
+arrived as a queued call after the stack-allocated job had been destroyed: a
+use-after-free that showed up as a segfault, or as a queue stuck busy so that every later
+keychain call hung. Whether it crashed depended on timing, which is why one machine was
+fine and the other was not.
+
+- `CredentialStore` now runs every job on the main thread. A call from another thread
+  blocks until the main thread has run it (`QMetaObject::invokeMethod` with
+  `Qt::BlockingQueuedConnection`).
+- `AuthManager::adoptTokens` no longer blocks a worker on the keychain write. A rotated
+  refresh token is recorded as pending and flushed from the main thread's event loop;
+  `~AuthManager` flushes synchronously so a rotation right before quit is not lost (a
+  lost rotation means the next start needs a fresh interactive sign-in).
+- `refreshGrant` and `signInInteractive` no longer hold `m_opMutex` across a keychain
+  call. A worker waiting for the main thread while holding a lock that `signOut()` (main
+  thread) takes would deadlock a Sign out click; the generation counter already covers
+  the race that lock was guarding.
+
+Benefit: connecting from the card no longer crashes or hangs on the keychain, on every
+machine. Solves: use-after-free in QtKeychain's job queue, and two deadlock windows the
+first fix would have introduced.
+
+### Session loop no longer spins after the first input (`RdpSession`)
+
+`wakeEvent`, the WinPR event the GUI thread signals to wake the session loop for queued
+input, was created as auto-reset. WinPR has no auto-reset events: `CreateEvent` logs
+"auto-reset events not yet implemented" and the handle's wait cleanup is a no-op. After
+the first key press or mouse move the event stayed signalled, so `WaitForMultipleObjects`
+returned immediately on every iteration and the loop ran at full CPU for the rest of the
+session (present since 1.2.5). The event is now manual-reset and the loop resets it right
+after each wake-up, before draining the event queue. Benefit: idle session CPU is back to
+a few percent, and the WinPR error line is gone from the log.
+
+### Clearer status while Azure starts a session host (`RdpSession`)
+
+FreeRDP reports a deallocated session host that Azure is booting through its retry
+callback with the internal tag `arm-transport`, which the UI showed verbatim as
+"arm-transport (3/20)". It now reads "Waiting for the session host to start (3/20)".
+
 ## Open points
 
 - The `req_cnf` (RDSTLS proof-of-possession) refresh grant needs a host pool with

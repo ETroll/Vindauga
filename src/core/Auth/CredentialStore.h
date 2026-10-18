@@ -18,8 +18,11 @@ public:
 
     explicit CredentialStore(QString service = QStringLiteral("vindauga"));
 
-    // Synchronous API (a nested QEventLoop waits for the QtKeychain job to finish). Safe
-    // to call from the GUI thread. key = SavedConnection::id.
+    // Synchronous API (a nested QEventLoop waits for the QtKeychain job to finish). The
+    // job itself always runs on the main thread, whichever thread calls: QtKeychain's job
+    // queue is single-threaded (see CredentialStore.cpp). A call from another thread
+    // blocks until the main thread has run the job, so the main thread must be
+    // processing events meanwhile. key = SavedConnection::id.
     Credentials load(const QString& key) const;
     void save(const QString& key, const QString& username, const QString& password) const;
     void remove(const QString& key) const;
