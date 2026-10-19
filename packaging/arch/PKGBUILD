@@ -9,7 +9,7 @@
 # `sha256sums=('SKIP')` is deliberate for the same reason: the tarball is generated
 # locally, so there is no fixed upstream checksum to pin.
 pkgname=vindauga
-pkgver=1.4.0
+pkgver=1.4.1
 pkgrel=1
 pkgdesc="Native Linux client for Azure Virtual Desktop / Windows 365"
 arch=('x86_64')
@@ -54,4 +54,17 @@ check() {
 
 package() {
     DESTDIR="$pkgdir" cmake --install build
+
+    # Pin the Qt runtime dependencies to the versions this binary was just built against.
+    # Qt symbols are versioned (Qt_6.12), so a binary built against a newer Qt fails at
+    # startup ("version `Qt_6.12' not found") on a system with an older one; pacman can only
+    # refuse the install if the package declares the requirement. Arrays modified in
+    # package() end up in .PKGINFO. The pkgrel suffix is stripped so a Qt rebuild does not
+    # raise the requirement.
+    local _p _v
+    for _p in qt6-base qt6-declarative qt6-webengine; do
+        _v=$(pacman -Q "$_p" | cut -d' ' -f2)
+        _v=${_v%-*}
+        depends=("${depends[@]/#$_p/$_p>=$_v}")
+    done
 }
