@@ -15,10 +15,23 @@ pkgdesc="Native Linux client for Azure Virtual Desktop / Windows 365"
 arch=('x86_64')
 url="https://github.com/ETroll/Vindauga"
 license=('MIT')
+# Pin the Qt runtime dependencies to the version this binary is built against. Qt symbols
+# are versioned (Qt_6.12), so a binary built against a newer Qt fails at startup ("version
+# `Qt_6.12' not found") on a system with an older one; pacman can only refuse the install
+# if the package declares the requirement. Evaluated when the PKGBUILD is sourced, which
+# for `makepkg -s` is before the dependencies are installed, hence the fallback from the
+# installed version to the sync database version (what `-s` will install). The pkgrel
+# suffix is stripped so a Qt rebuild does not raise the requirement.
+_qtver() {
+    local v
+    v=$(LC_ALL=C pacman -Qi "$1" 2>/dev/null || LC_ALL=C pacman -Si "$1")
+    v=$(awk '/^Version/ {print $3; exit}' <<<"$v")
+    echo "${v%-*}"
+}
 depends=(
-    'qt6-base'
-    'qt6-declarative'
-    'qt6-webengine'
+    "qt6-base>=$(_qtver qt6-base)"
+    "qt6-declarative>=$(_qtver qt6-declarative)"
+    "qt6-webengine>=$(_qtver qt6-webengine)"
     'qtkeychain-qt6'
     'freerdp'
     # Linked directly (X11 keymap handling), not only via qt6-base, so listed explicitly
@@ -54,17 +67,4 @@ check() {
 
 package() {
     DESTDIR="$pkgdir" cmake --install build
-
-    # Pin the Qt runtime dependencies to the versions this binary was just built against.
-    # Qt symbols are versioned (Qt_6.12), so a binary built against a newer Qt fails at
-    # startup ("version `Qt_6.12' not found") on a system with an older one; pacman can only
-    # refuse the install if the package declares the requirement. Arrays modified in
-    # package() end up in .PKGINFO. The pkgrel suffix is stripped so a Qt rebuild does not
-    # raise the requirement.
-    local _p _v
-    for _p in qt6-base qt6-declarative qt6-webengine; do
-        _v=$(pacman -Q "$_p" | cut -d' ' -f2)
-        _v=${_v%-*}
-        depends=("${depends[@]/#$_p/$_p>=$_v}")
-    done
 }
