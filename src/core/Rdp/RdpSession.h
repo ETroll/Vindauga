@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "../Auth/AadTokenProvider.h"
 #include "AadInteractiveAuth.h"
@@ -167,23 +168,26 @@ public:
     // the notify* methods. Called from the worker thread; hops to the GUI thread
     // internally (QClipboard is a GUI-thread API).
     //
-    // Remote -> local clipboard: non-blocking (nothing to wait for); hops to the GUI thread
-    // and records what it wrote so the change listener does not echo it back to the server.
-    // Images are flattened to opaque RGB (CF_DIB has no dependable alpha).
-    void setLocalClipboardText(const QString& text);
-    void setLocalClipboardImage(const QImage& image);
+    // Remote -> local clipboard. Called from the cliprdr channel thread with each
+    // FORMAT_DATA_RESPONSE (`ok` false for a failed or oversized one). The response PDU does
+    // not name its format, so only one request is outstanding at a time; this decodes the
+    // answer for the format that was asked, then requests the job's next format or, when the
+    // job is done, hops to the GUI thread and puts everything on the clipboard at once (text,
+    // HTML or an image; images are flattened to opaque RGB since CF_DIB has no dependable
+    // alpha). It records what it wrote so the change listener does not echo it back.
+    // `expectedGeneration` (non-zero) is set by the failed-send path so that it only completes
+    // the fetch it belonged to.
+    void onRemoteClipboardResponse(const uint8_t* data, uint32_t length, bool ok,
+                                   uint64_t expectedGeneration = 0);
+
+    // Drops any outstanding or queued remote fetch (channel reconnect).
+    void resetRemoteClipboardRequests();
 
     // Local -> remote clipboard, served from a snapshot refreshed on the GUI thread, so it
     // never blocks. Text is UTF-16LE with a null terminator (CF_UNICODETEXT); CF_DIB is a
-    // BITMAPINFOHEADER and pixels without a BITMAPFILEHEADER. Empty if there is nothing of
-    // that kind.
+    // BITMAPINFOHEADER and pixels without a BITMAPFILEHEADER; the HTML format is a CF_HTML
+    // payload. Empty if there is nothing of that kind.
     QByteArray localClipboardData(uint32_t formatId) const;
-
-    // Completes the single outstanding FORMAT_DATA_REQUEST (the response PDU does not name
-    // its format) and returns the format that was requested, or 0 if none. Starts the next
-    // queued request, if any.
-    // `startQueued` false discards the queued request instead (channel reconnect).
-    uint32_t finishRemoteClipboardRequest(bool startQueued = true);
 
     // Gives the free C callbacks access to the registered AAD handler. Public for the
     // same reason as the notify* methods.
@@ -223,10 +227,14 @@ public slots:
     // Sends the client capabilities (long format names), then announces the local
     // clipboard. Queued from vindaugaCliprdrMonitorReady.
     void onClipboardMonitorReady();
-    // Asks the server for the actual data in the given format (CF_UNICODETEXT or CF_DIB;
-    // queued from vindaugaCliprdrServerFormatList, never called synchronously from it;
-    // see above).
-    void requestRemoteClipboard(uint32_t formatId);
+    // Starts fetching the given formats (CF_UNICODETEXT, CF_DIB and/or the server's HTML id)
+    // one after another; queued from vindaugaCliprdrServerFormatList, never called
+    // synchronously from it; see above.
+    void requestRemoteClipboard(std::vector<uint32_t> formats);
+    // Sends the FORMAT_DATA_REQUEST for one format of the running fetch (queued from
+    // onRemoteClipboardResponse).
+    // `generation` ties the send to the fetch that queued it; a stale one is dropped.
+    void sendRemoteClipboardRequest(uint32_t formatId, uint64_t generation);
     // Answers the server with the local clipboard content in the requested format (queued
     // from vindaugaCliprdrServerFormatDataRequest, never called synchronously from it).
     void respondWithLocalClipboard(uint32_t formatId);
