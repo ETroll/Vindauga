@@ -9,6 +9,7 @@
 #include <QSize>
 #include <QString>
 #include <QUrl>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -166,16 +167,23 @@ public:
     // the notify* methods. Called from the worker thread; hops to the GUI thread
     // internally (QClipboard is a GUI-thread API).
     //
-    // Remote -> local clipboard: non-blocking (nothing to wait for). Arms a guard
-    // (ignoringNextClipboardChange) before the setText() call so the clipboard change
-    // listener registered in the constructor does not re-announce our own update.
+    // Remote -> local clipboard: non-blocking (nothing to wait for); hops to the GUI thread
+    // and records what it wrote so the change listener does not echo it back to the server.
+    // Images are flattened to opaque RGB (CF_DIB has no dependable alpha).
     void setLocalClipboardText(const QString& text);
+    void setLocalClipboardImage(const QImage& image);
 
-    // Local -> remote clipboard: blocking GUI-thread hop. Called from
-    // respondWithLocalClipboardText() on the worker thread, never synchronously from the
-    // cliprdr ServerFormatDataRequest callback itself. Returns UTF-16LE with a null
-    // terminator, per the CF_UNICODETEXT format.
-    QByteArray localClipboardTextUtf16() const;
+    // Local -> remote clipboard, served from a snapshot refreshed on the GUI thread, so it
+    // never blocks. Text is UTF-16LE with a null terminator (CF_UNICODETEXT); CF_DIB is a
+    // BITMAPINFOHEADER and pixels without a BITMAPFILEHEADER. Empty if there is nothing of
+    // that kind.
+    QByteArray localClipboardData(uint32_t formatId) const;
+
+    // Completes the single outstanding FORMAT_DATA_REQUEST (the response PDU does not name
+    // its format) and returns the format that was requested, or 0 if none. Starts the next
+    // queued request, if any.
+    // `startQueued` false discards the queued request instead (channel reconnect).
+    uint32_t finishRemoteClipboardRequest(bool startQueued = true);
 
     // Gives the free C callbacks access to the registered AAD handler. Public for the
     // same reason as the notify* methods.
@@ -204,16 +212,24 @@ public:
     // vindaugaCliprdrMonitorReady. Public slots (not private) because the free C
     // callbacks need access, and invokeMethod-by-name requires meta-object registration.
 public slots:
-    // Announces the CF_UNICODETEXT format to the server (the data itself is only sent
-    // if/when the server asks, see vindaugaCliprdrServerFormatDataRequest). No-op if the
-    // cliprdr channel has not been negotiated.
-    void announceLocalClipboardText();
-    // Asks the server for the actual CF_UNICODETEXT data (queued from
-    // vindaugaCliprdrServerFormatList, never called synchronously from it; see above).
-    void requestRemoteClipboardText();
-    // Answers the server with the local clipboard text (queued from
-    // vindaugaCliprdrServerFormatDataRequest, never called synchronously from it).
-    void respondWithLocalClipboardText();
+    // Announces the formats the local clipboard currently holds (CF_UNICODETEXT and/or
+    // CF_DIB) to the server (the data itself is only sent if/when the server asks, see
+    // vindaugaCliprdrServerFormatDataRequest). No-op if the cliprdr channel has not been
+    // negotiated.
+    void announceLocalClipboard();
+    // GUI thread: refreshes the clipboard snapshot and, if `announce` and the change is not
+    // our own server-to-local write, queues announceLocalClipboard.
+    void onLocalClipboardChanged(bool announce = true);
+    // Sends the client capabilities (long format names), then announces the local
+    // clipboard. Queued from vindaugaCliprdrMonitorReady.
+    void onClipboardMonitorReady();
+    // Asks the server for the actual data in the given format (CF_UNICODETEXT or CF_DIB;
+    // queued from vindaugaCliprdrServerFormatList, never called synchronously from it;
+    // see above).
+    void requestRemoteClipboard(uint32_t formatId);
+    // Answers the server with the local clipboard content in the requested format (queued
+    // from vindaugaCliprdrServerFormatDataRequest, never called synchronously from it).
+    void respondWithLocalClipboard(uint32_t formatId);
 
 private slots:
     // Connected to QThread::started (runs on the worker thread after moveToThread in
