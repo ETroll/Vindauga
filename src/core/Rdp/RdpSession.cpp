@@ -1,10 +1,13 @@
 #include "RdpSession.h"
 
+#include <QBuffer>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGuiApplication>
+#include <QMimeData>
+#include <QPointer>
 #include <QMetaObject>
 #include <QMutex>
 #include <QMutexLocker>
@@ -26,12 +29,15 @@
 #include <winpr/string.h>
 #include <winpr/synch.h>
 #include <winpr/user.h>
+#include <freerdp/channels/cliprdr.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 #include "../Logging.h"
 
@@ -347,21 +353,202 @@ DWORD vindaugaVerifyChangedCertificateEx(freerdp* instance, const char* host, UI
     }
 }
 
+// Upper bound for a clipboard image in either direction; cliprdr itself allows much more,
+// but a runaway paste would only stall the session and exhaust memory.
+constexpr qsizetype kMaxClipboardImageBytes = 64 * 1024 * 1024;
+
+// CF_DIB is a BITMAPINFO followed by the pixel data, i.e. a BMP file without its 14-byte
+// BITMAPFILEHEADER. Qt's BMP reader needs that header, so rebuild it: the pixel data
+// offset is the info header plus any BI_BITFIELDS masks and colour table.
+QImage vindaugaImageFromDib(const QByteArray& dib) {
+    constexpr qsizetype kFileHeaderSize = 14;
+    constexpr quint32 kBiBitfields = 3;
+    if (dib.size() < 40 || dib.size() > kMaxClipboardImageBytes)
+        return {};
+
+    const auto* d = reinterpret_cast<const uchar*>(dib.constData());
+    auto u32 = [d](int off) {
+        return quint32(d[off]) | quint32(d[off + 1]) << 8 | quint32(d[off + 2]) << 16 |
+               quint32(d[off + 3]) << 24;
+    };
+    const quint32 headerSize = u32(0);
+    if (headerSize < 40 || headerSize > 124 || qsizetype(headerSize) > dib.size())
+        return {};
+    const qint32 width = qint32(u32(4));
+    const qint32 height = qint32(u32(8));
+    const quint32 bitCount = quint32(d[14]) | quint32(d[15]) << 8;
+    const quint32 compression = u32(16);
+    // Only uncompressed pixels: an RLE/JPEG/PNG DIB could decode to far more than its wire
+    // size, so the byte cap above would no longer bound the decoded raster.
+    constexpr quint32 kBiRgb = 0;
+    if (compression != kBiRgb && compression != kBiBitfields)
+        return {};
+    if (width <= 0 || height == 0 || height == std::numeric_limits<qint32>::min() ||
+        (bitCount != 1 && bitCount != 4 && bitCount != 8 && bitCount != 16 && bitCount != 24 &&
+         bitCount != 32))
+        return {};
+    const quint64 absHeight = quint64(height < 0 ? -qint64(height) : height);
+    if (quint64(width) * absHeight * 4 > quint64(kMaxClipboardImageBytes))
+        return {};
+    quint32 colorsUsed = u32(32);
+    if (colorsUsed == 0 && bitCount <= 8)
+        colorsUsed = 1u << bitCount;
+
+    // Only the 40-byte header is followed by separate masks; V4/V5 headers embed them.
+    const quint32 masks = (compression == kBiBitfields && headerSize == 40) ? 12 : 0;
+    // A packed DIB carries any V5 colour profile after the pixels (as in a BMP file), so it
+    // does not move the pixel offset.
+    const quint64 pixelOffset =
+        quint64(kFileHeaderSize) + headerSize + masks + quint64(colorsUsed) * 4;
+    if (pixelOffset > quint64(dib.size()) + kFileHeaderSize)
+        return {};
+
+    QByteArray bmp;
+    bmp.reserve(kFileHeaderSize + dib.size());
+    const quint32 fileSize = quint32(kFileHeaderSize + dib.size());
+    bmp.append("BM", 2);
+    for (quint32 v : {fileSize, 0u, quint32(pixelOffset)})
+        for (int i = 0; i < 4; ++i)
+            bmp.append(char((v >> (8 * i)) & 0xff));
+    bmp.append(dib);
+
+    QImage image;
+    image.loadFromData(bmp, "BMP");
+    return image;
+}
+
+// Inverse of the above: Qt writes a bottom-up 24-bit BITMAPINFOHEADER BMP for opaque
+// images, whose file header is dropped. Alpha is flattened, which is what Windows
+// applications expect from CF_DIB anyway.
+QByteArray vindaugaDibFromImage(const QImage& image) {
+    if (image.isNull())
+        return {};
+    QByteArray bmp;
+    QBuffer buffer(&bmp);
+    buffer.open(QIODevice::WriteOnly);
+    if (!image.convertToFormat(QImage::Format_RGB32).save(&buffer, "BMP"))
+        return {};
+    if (bmp.size() <= 14 || bmp.size() - 14 > kMaxClipboardImageBytes)
+        return {};
+    return bmp.mid(14);
+}
+
+// Registered clipboard format "HTML Format" (CF_HTML). The id is only meaningful per peer:
+// the server announces it by name in its format list, and for what we announce any id in
+// the registered range works as long as we answer requests for it.
+constexpr char kHtmlFormatName[] = "HTML Format";
+constexpr uint32_t kLocalHtmlFormatId = 0xC100;
+
+// A fully fetched server clipboard, applied to QClipboard in one go so text and HTML end up
+// in the same QMimeData.
+struct RemoteClipboardData {
+    bool hasText = false;
+    bool hasHtml = false;
+    bool hasImage = false;
+    QString text;
+    QString html;
+    QImage image;
+};
+
+// CF_HTML is an ASCII header (Version, StartHTML, EndHTML, StartFragment, EndFragment as byte
+// offsets into the payload) followed by UTF-8 markup. Returns the whole markup document, or
+// the fragment if the document range is unusable, or empty if the header cannot be trusted.
+QString vindaugaHtmlFromCfHtml(const QByteArray& data) {
+    // The header is a handful of short lines at the start; never scan further than that.
+    constexpr qsizetype kMaxHeaderBytes = 1024;
+    const QByteArray header = data.left(kMaxHeaderBytes);
+    qsizetype headerEnd = 0; // end of the last header line we recognised
+    auto readOffset = [&](const char* key) -> qsizetype {
+        const qsizetype at = header.indexOf(key);
+        if (at < 0)
+            return -1;
+        const qsizetype start = at + qsizetype(std::strlen(key));
+        const qsizetype end = header.indexOf('\n', start);
+        if (end < 0)
+            return -1;
+        bool ok = false;
+        const qint64 v = header.mid(start, end - start).trimmed().toLongLong(&ok);
+        headerEnd = std::max(headerEnd, end + 1);
+        return ok && v >= 0 && v <= data.size() ? qsizetype(v) : -1;
+    };
+    const qsizetype startHtml = readOffset("StartHTML:");
+    const qsizetype endHtml = readOffset("EndHTML:");
+    const qsizetype startFragment = readOffset("StartFragment:");
+    const qsizetype endFragment = readOffset("EndFragment:");
+    auto slice = [&data](qsizetype from, qsizetype to) {
+        return QString::fromUtf8(data.constData() + from, to - from);
+    };
+    // Ranges must start after the header; the fragment, when both are given, lies inside the
+    // document. StartHTML may legitimately be -1 (no context), then only the fragment counts.
+    const bool htmlOk = startHtml >= headerEnd && endHtml > startHtml;
+    const bool fragmentOk = startFragment >= headerEnd && endFragment > startFragment &&
+                            (!htmlOk || (startFragment >= startHtml && endFragment <= endHtml));
+    if (htmlOk && (startFragment < 0 || fragmentOk))
+        return slice(startHtml, endHtml);
+    if (fragmentOk)
+        return slice(startFragment, endFragment);
+    return {};
+}
+
+// Wraps Qt's HTML in a CF_HTML payload with the Start/EndFragment markers Windows
+// applications look for.
+QByteArray vindaugaCfHtmlFromHtml(const QString& html) {
+    static const QByteArray kStart = "<!--StartFragment-->";
+    static const QByteArray kEnd = "<!--EndFragment-->";
+    QByteArray doc = html.toUtf8();
+    if (doc.isEmpty() || doc.size() > kMaxClipboardImageBytes)
+        return {};
+    // Reuse existing markers only as one ordered pair; anything else is stripped and replaced,
+    // otherwise the advertised fragment offsets would not match the text.
+    const qsizetype existingStart = doc.indexOf(kStart);
+    if (existingStart < 0 || doc.indexOf(kEnd, existingStart + kStart.size()) < 0) {
+        doc.replace(kStart, "");
+        doc.replace(kEnd, "");
+        const QByteArray lower = doc.toLower(); // ASCII lowering keeps byte offsets intact
+        const qsizetype bodyOpen = lower.indexOf("<body");
+        const qsizetype bodyOpenEnd = bodyOpen >= 0 ? lower.indexOf('>', bodyOpen) : -1;
+        const qsizetype bodyClose = lower.lastIndexOf("</body");
+        if (bodyOpenEnd >= 0 && bodyClose > bodyOpenEnd) {
+            doc.insert(bodyClose, kEnd);
+            doc.insert(bodyOpenEnd + 1, kStart);
+        } else {
+            doc = "<html><body>" + kStart + doc + kEnd + "</body></html>";
+        }
+    }
+    const auto header = [](qsizetype a, qsizetype b, qsizetype c, qsizetype d) {
+        return QByteArray("Version:0.9\r\nStartHTML:") + QByteArray::number(a).rightJustified(10, '0') +
+               "\r\nEndHTML:" + QByteArray::number(b).rightJustified(10, '0') +
+               "\r\nStartFragment:" + QByteArray::number(c).rightJustified(10, '0') +
+               "\r\nEndFragment:" + QByteArray::number(d).rightJustified(10, '0') + "\r\n";
+    };
+    const qsizetype headerSize = header(0, 0, 0, 0).size(); // fixed width
+    const qsizetype fragStart = doc.indexOf(kStart) + kStart.size();
+    const qsizetype fragEnd = doc.indexOf(kEnd, fragStart);
+    if (fragStart < kStart.size() || fragEnd < fragStart)
+        return {};
+    QByteArray out = header(headerSize, headerSize + doc.size(), headerSize + fragStart,
+                            headerSize + fragEnd);
+    out += doc;
+    out.append('\0');
+    return out;
+}
+
 // cliprdr (clipboard) channel callbacks. All run on cliprdr's own dedicated channel
 // thread (channel_client_thread_proc), not on the session's worker thread, unlike
-// disp/RDPGFX; see RdpSession.h at requestRemoteClipboardText /
-// respondWithLocalClipboardText for why that matters. QClipboard access (a GUI-thread
-// API) happens inside RdpSession::setLocalClipboardText/localClipboardTextUtf16, not
+// disp/RDPGFX; see RdpSession.h at requestRemoteClipboard /
+// respondWithLocalClipboard for why that matters. QClipboard access (a GUI-thread
+// API) happens inside RdpSession::setLocalClipboard*/localClipboard*, not
 // here.
 UINT vindaugaCliprdrMonitorReady(CliprdrClientContext* context,
                                  const CLIPRDR_MONITOR_READY* /*monitorReady*/) {
-    // Channel is ready: announce any existing local clipboard content right away so
-    // pasting into the session works even if the text was copied before connecting
-    // (same behaviour as mstsc/xfreerdp).
+    // Channel is ready: send our capabilities and announce any existing local clipboard
+    // content right away so pasting into the session works even if it was copied before
+    // connecting (same behaviour as mstsc/xfreerdp). Queued onto the worker thread: the
+    // announcement needs a blocking GUI-thread hop to inspect the clipboard.
     auto* self = static_cast<RdpSession*>(
         reinterpret_cast<VindaugaRdpContext*>(context->rdpcontext)->self);
     if (self)
-        self->announceLocalClipboardText();
+        QMetaObject::invokeMethod(self, "onClipboardMonitorReady", Qt::QueuedConnection);
     return CHANNEL_RC_OK;
 }
 
@@ -375,51 +562,68 @@ UINT vindaugaCliprdrServerFormatList(CliprdrClientContext* context,
     response.common.msgFlags = CB_RESPONSE_OK;
     context->ClientFormatListResponse(context, &response);
 
+    // Pick what to fetch. Text comes first and brings HTML along when offered (a spreadsheet
+    // range, a web page), so both land on the local clipboard together; without text an image
+    // beats HTML, which for images only references files we could not serve anyway.
     bool hasText = false;
+    bool hasDib = false;
+    uint32_t htmlId = 0;
     for (UINT32 i = 0; i < formatList->numFormats; ++i) {
-        if (formatList->formats[i].formatId == CF_UNICODETEXT) {
+        const CLIPRDR_FORMAT& f = formatList->formats[i];
+        if (f.formatId == CF_UNICODETEXT)
             hasText = true;
-            break;
-        }
+        else if (f.formatId == CF_DIB)
+            hasDib = true;
+        else if (f.formatName && std::strcmp(f.formatName, kHtmlFormatName) == 0)
+            htmlId = f.formatId;
     }
-    if (!hasText)
+    std::vector<uint32_t> wanted;
+    if (hasText) {
+        wanted.push_back(CF_UNICODETEXT);
+        if (htmlId)
+            wanted.push_back(htmlId);
+    } else if (hasDib) {
+        wanted.push_back(CF_DIB);
+    } else if (htmlId) {
+        wanted.push_back(htmlId);
+    }
+    if (wanted.empty())
         return CHANNEL_RC_OK;
 
     // Lazy fetch: the protocol only announces formats here; the content is requested
     // separately (the reply arrives in vindaugaCliprdrServerFormatDataResponse). Never
     // call ClientFormatDataRequest synchronously from here; see RdpSession.h at
-    // requestRemoteClipboardText.
+    // requestRemoteClipboard.
     auto* self = static_cast<RdpSession*>(
         reinterpret_cast<VindaugaRdpContext*>(context->rdpcontext)->self);
     if (self)
-        QMetaObject::invokeMethod(self, "requestRemoteClipboardText", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            self, [self, wanted = std::move(wanted)]() { self->requestRemoteClipboard(wanted); },
+            Qt::QueuedConnection);
     return CHANNEL_RC_OK;
 }
 
 UINT vindaugaCliprdrServerFormatDataResponse(CliprdrClientContext* context,
                                              const CLIPRDR_FORMAT_DATA_RESPONSE* response) {
-    if (!(response->common.msgFlags & CB_RESPONSE_OK) || !response->requestedFormatData ||
-        response->common.dataLen == 0)
-        return CHANNEL_RC_OK;
-
-    // CF_UNICODETEXT: null-terminated UTF-16 little-endian on the wire, which matches the
-    // host's native byte order on x86/x86_64, so no conversion is needed.
-    const auto* utf16Data = reinterpret_cast<const char16_t*>(response->requestedFormatData);
-    size_t len = response->common.dataLen / 2;
-    while (len > 0 && utf16Data[len - 1] == 0)
-        --len; // strip trailing null terminator(s)
-    const QString text = QString::fromUtf16(utf16Data, static_cast<int>(len));
-
     auto* self = static_cast<RdpSession*>(
         reinterpret_cast<VindaugaRdpContext*>(context->rdpcontext)->self);
-    if (self)
-        self->setLocalClipboardText(text);
+    if (!self)
+        return CHANNEL_RC_OK;
+
+    // Always completes the outstanding request, whether or not it carries data, so a failed
+    // response cannot stall the next one. dataLen is an untrusted 32-bit value: bounded
+    // before anything is copied.
+    const bool ok = (response->common.msgFlags & CB_RESPONSE_OK) && response->requestedFormatData &&
+                    response->common.dataLen != 0 &&
+                    response->common.dataLen <= kMaxClipboardImageBytes;
+    self->onRemoteClipboardResponse(response->requestedFormatData, response->common.dataLen, ok);
     return CHANNEL_RC_OK;
 }
 
 UINT vindaugaCliprdrServerFormatDataRequest(CliprdrClientContext* context,
                                             const CLIPRDR_FORMAT_DATA_REQUEST* request) {
-    if (request->requestedFormatId != CF_UNICODETEXT) {
+    if (request->requestedFormatId != CF_UNICODETEXT && request->requestedFormatId != CF_DIB &&
+        request->requestedFormatId != kLocalHtmlFormatId) {
         // Fast rejection: nothing to fetch for an unsupported format. Safe synchronously
         // (no GUI-thread access involved; matches xfreerdp's "format not found" fast path
         // in xf_cliprdr_server_format_data_request).
@@ -431,7 +635,7 @@ UINT vindaugaCliprdrServerFormatDataRequest(CliprdrClientContext* context,
 
     // Do not call ClientFormatDataResponse synchronously from here when real data must
     // be fetched (that also needs a blocking GUI-thread hop for QClipboard); see
-    // RdpSession.h at respondWithLocalClipboardText.
+    // RdpSession.h at respondWithLocalClipboard.
     auto* self = static_cast<RdpSession*>(
         reinterpret_cast<VindaugaRdpContext*>(context->rdpcontext)->self);
     if (!self) {
@@ -442,7 +646,9 @@ UINT vindaugaCliprdrServerFormatDataRequest(CliprdrClientContext* context,
         response.common.msgFlags = CB_RESPONSE_FAIL;
         return context->ClientFormatDataResponse(context, &response);
     }
-    QMetaObject::invokeMethod(self, "respondWithLocalClipboardText", Qt::QueuedConnection);
+    const uint32_t formatId = request->requestedFormatId;
+    QMetaObject::invokeMethod(self, [self, formatId]() { self->respondWithLocalClipboard(formatId); },
+                              Qt::QueuedConnection);
     return CHANNEL_RC_OK;
 }
 
@@ -490,6 +696,9 @@ void vindaugaOnChannelConnected(void* context, const ChannelConnectedEventArgs* 
     } else if (std::strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
         auto* cliprdr = reinterpret_cast<CliprdrClientContext*>(e->pInterface);
         reinterpret_cast<VindaugaRdpContext*>(context)->cliprdr = cliprdr;
+        // A fresh channel (e.g. after auto-reconnect) cannot answer a request from the old one.
+        if (auto* self = reinterpret_cast<VindaugaRdpContext*>(context)->self)
+            static_cast<RdpSession*>(self)->resetRemoteClipboardRequests();
         cliprdr->MonitorReady = vindaugaCliprdrMonitorReady;
         cliprdr->ServerFormatList = vindaugaCliprdrServerFormatList;
         cliprdr->ServerFormatDataRequest = vindaugaCliprdrServerFormatDataRequest;
@@ -500,7 +709,7 @@ void vindaugaOnChannelConnected(void* context, const ChannelConnectedEventArgs* 
 
 // Thin wrapper around freerdp_client_OnChannelDisconnectedEventHandler that also clears
 // VindaugaRdpContext::cliprdr/disp when the channel disconnects. Without this, an
-// already-queued requestRemoteClipboardText/respondWithLocalClipboardText (or a late
+// already-queued requestRemoteClipboard/respondWithLocalClipboard (or a late
 // requestResize) could run after FreeRDP has freed the channel context (use after
 // free). The null checks in those methods only protect if the pointer is cleared here.
 void vindaugaOnChannelDisconnected(void* context, const ChannelDisconnectedEventArgs* e) {
@@ -786,11 +995,37 @@ struct RdpSession::Impl {
     RdstlsCredentialPrompt* rdstlsPrompt = nullptr; // not owned by RdpSession
     CertificatePrompt* certPrompt = nullptr; // not owned by RdpSession
 
-    // Guard against self-triggering: armed (on the GUI thread) right before
-    // setLocalClipboardText()'s QClipboard::setText() call, checked and cleared by the
-    // clipboardConnection listener. Only accessed on the GUI thread, so no
-    // synchronisation is needed.
-    bool ignoringNextClipboardChange = false;
+    // Snapshot of the local clipboard in the formats that can be sent to the server. It
+    // is written only on the GUI thread (QClipboard's thread) and read on the cliprdr and
+    // worker threads, so serving the server's data requests never has to block on the GUI
+    // thread (which may be joining the worker in stop()).
+    QMutex clipboardMutex;
+    QString clipboardText;
+    QString clipboardHtml;
+    QByteArray clipboardDib;
+    // What the last server-to-local update put on the clipboard. A dataChanged whose
+    // snapshot equals it is our own write and must not be announced back. GUI thread only.
+    bool remoteApplied = false;
+    QString remoteAppliedText;
+    QString remoteAppliedHtml;
+    QByteArray remoteAppliedDib;
+
+    // The FORMAT_DATA_RESPONSE PDU does not name its format, so only one request may be
+    // outstanding. A fetch is a job of one or more formats requested one after another
+    // (remoteJob.front() is the one in flight) and collected into remoteData. A newer job is
+    // parked in queuedRemoteJob and replaces the current one as soon as its response is in.
+    // Reset when the channel reconnects. There is deliberately no timeout that sends a second
+    // request: the protocol has no request id, so a late first response would be decoded as
+    // the second request's format.
+    QMutex remoteRequestMutex;
+    bool remoteRequestInFlight = false;
+    std::vector<uint32_t> remoteJob;
+    std::vector<uint32_t> queuedRemoteJob;
+    // Bumped whenever a job starts, is replaced or is reset. Queued sends and the queued GUI
+    // apply carry the value they were created under and are dropped if it moved on.
+    std::atomic<uint64_t> remoteGeneration{0};
+    RemoteClipboardData remoteData;
+
     // Connected in the constructor to QGuiApplication::clipboard()->dataChanged with qApp
     // as context, so the listener runs on the GUI thread even though RdpSession itself is
     // moved to the worker thread in start(). Disconnected explicitly in ~Impl() before
@@ -926,15 +1161,14 @@ RdpSession::RdpSession(QString rdpText, QString aadToken, QObject* parent)
     freerdp_settings_set_bool(context->settings, FreeRDP_GfxAVC444, TRUE);
     freerdp_settings_set_bool(context->settings, FreeRDP_GfxAVC444v2, TRUE);
 
-    // Clipboard redirection is disabled for now: FreeRDP 3.30's own PDU parser
-    // (cliprdr_read_format_list, cliprdr_common.c) fails on incoming format lists from
-    // real Windows rdpclip senders ("invalid length, got 2, require at least 4") before
-    // they ever reach our callbacks. This is a known upstream bug (the count pass and the
-    // read pass used different loop conditions) fixed in FreeRDP 3.31.x. The format-name
-    // mode is server-driven, so no client-side setting avoids the buggy branch. The
-    // cliprdr callbacks above remain correct and are kept.
-    // TODO: re-enable once FreeRDP >= 3.31.1 is the minimum supported version.
-    freerdp_settings_set_bool(context->settings, FreeRDP_RedirectClipboard, FALSE);
+    // Clipboard redirection (text and images) is on unless the .rdp file explicitly turns it
+    // off (redirectclipboard:i:0, e.g. a host pool policy). It was disabled while
+    // FreeRDP < 3.31 shipped a cliprdr_read_format_list bug that dropped the connection on
+    // real Windows format lists; 3.31.x and later parse them correctly.
+    const bool clipboardDisabledByFile = m_impl->rdpText.contains(
+        QStringLiteral("redirectclipboard:i:0"), Qt::CaseInsensitive);
+    freerdp_settings_set_bool(context->settings, FreeRDP_RedirectClipboard,
+                              clipboardDisabledByFile ? FALSE : TRUE);
 
     // Auto-reconnect: announces support for the server's reconnect cookie (the session is
     // resumed rather than logged on again) and lets runConnectionLoop() retry after a
@@ -967,14 +1201,12 @@ RdpSession::RdpSession(QString rdpText, QString aadToken, QObject* parent)
     // is then simply skipped and the rest of the session is unaffected.
     if (QGuiApplication::instance()) {
         m_impl->clipboardConnection = QObject::connect(
-            QGuiApplication::clipboard(), &QClipboard::dataChanged, qApp, [this]() {
-                if (m_impl->ignoringNextClipboardChange) {
-                    m_impl->ignoringNextClipboardChange = false;
-                    return;
-                }
-                QMetaObject::invokeMethod(this, "announceLocalClipboardText",
-                                          Qt::QueuedConnection);
-            });
+            QGuiApplication::clipboard(), &QClipboard::dataChanged, qApp,
+            [this]() { onLocalClipboardChanged(); });
+        QMetaObject::invokeMethod(qApp, [guard = QPointer<RdpSession>(this)]() {
+            if (guard)
+                guard->onLocalClipboardChanged(/*announce=*/false);
+        });
     }
 
     qCDebug(lcRdp) << "RdpSession context created. gateway="
@@ -1438,53 +1670,279 @@ QSize RdpSession::lastRequestedResize() const { return m_impl->lastRequestedResi
 
 qreal RdpSession::lastRequestedScale() const { return m_impl->lastRequestedScale; }
 
-// Runs either directly on the cliprdr channel thread (called synchronously from
-// vindaugaCliprdrMonitorReady, which is safe; see RdpSession.h) or queued on the worker
-// thread via QMetaObject::invokeMethod from the QClipboard::dataChanged listener in the
-// constructor (which itself runs on the GUI thread). No-op if the server has not
-// negotiated the cliprdr channel.
-void RdpSession::announceLocalClipboardText() {
+// Runs on the worker thread, queued from vindaugaCliprdrMonitorReady (which itself runs on
+// the cliprdr channel thread).
+void RdpSession::onClipboardMonitorReady() {
     auto* vctx = reinterpret_cast<VindaugaRdpContext*>(m_impl->context);
     if (!vctx || !vctx->cliprdr)
         return;
 
-    CLIPRDR_FORMAT format = {};
-    format.formatId = CF_UNICODETEXT;
-    format.formatName = nullptr;
+    // Same handshake as xfreerdp's xf_cliprdr_monitor_ready: capabilities first, then the
+    // format list. Long format names must be announced, otherwise a modern rdpclip keeps
+    // sending short names and FreeRDP's format list parser has to guess which it got.
+    CLIPRDR_GENERAL_CAPABILITY_SET general = {};
+    general.capabilitySetType = CB_CAPSTYPE_GENERAL;
+    general.capabilitySetLength = 12;
+    general.version = CB_CAPS_VERSION_2;
+    general.generalFlags = CB_USE_LONG_FORMAT_NAMES;
+
+    CLIPRDR_CAPABILITIES caps = {};
+    caps.common.msgType = CB_CLIP_CAPS;
+    caps.cCapabilitiesSets = 1;
+    caps.capabilitySets = reinterpret_cast<CLIPRDR_CAPABILITY_SET*>(&general);
+    if (vctx->cliprdr->ClientCapabilities(vctx->cliprdr, &caps) != CHANNEL_RC_OK)
+        qCWarning(lcRdp) << "CliprdrClientContext::ClientCapabilities failed";
+
+    announceLocalClipboard();
+}
+
+// Runs on the worker thread (queued from onLocalClipboardChanged and from
+// onClipboardMonitorReady). No-op if the server has not negotiated the cliprdr channel.
+void RdpSession::announceLocalClipboard() {
+    auto* vctx = reinterpret_cast<VindaugaRdpContext*>(m_impl->context);
+    if (!vctx || !vctx->cliprdr)
+        return;
+
+    bool hasText;
+    bool hasHtml;
+    bool hasImage;
+    {
+        QMutexLocker lock(&m_impl->clipboardMutex);
+        hasText = !m_impl->clipboardText.isEmpty();
+        hasHtml = !m_impl->clipboardHtml.isEmpty();
+        hasImage = !m_impl->clipboardDib.isEmpty();
+    }
+
+    CLIPRDR_FORMAT formats[3] = {};
+    UINT32 count = 0;
+    if (hasText)
+        formats[count++].formatId = CF_UNICODETEXT;
+    if (hasHtml) {
+        formats[count].formatId = kLocalHtmlFormatId;
+        formats[count++].formatName = const_cast<char*>(kHtmlFormatName);
+    }
+    if (hasImage)
+        formats[count++].formatId = CF_DIB;
+    // count == 0 sends an empty list, which clears the server's clipboard: the local one
+    // was cleared or now holds something we cannot transfer.
 
     CLIPRDR_FORMAT_LIST formatList = {};
     formatList.common.msgType = CB_FORMAT_LIST;
-    formatList.numFormats = 1;
-    formatList.formats = &format;
+    formatList.numFormats = count;
+    formatList.formats = formats;
 
     if (vctx->cliprdr->ClientFormatList(vctx->cliprdr, &formatList) != CHANNEL_RC_OK)
         qCWarning(lcRdp) << "CliprdrClientContext::ClientFormatList failed";
+}
+
+// GUI thread. Refreshes the snapshot the worker/cliprdr threads serve from and, unless the
+// change is the echo of our own server-to-local update, announces it to the server.
+void RdpSession::onLocalClipboardChanged(bool announce) {
+    QString text;
+    QString html;
+    QByteArray dib;
+    if (const QMimeData* mime = QGuiApplication::clipboard()->mimeData()) {
+        if (mime->hasText())
+            text = mime->text();
+        if (mime->hasHtml())
+            html = mime->html();
+        if (mime->hasImage())
+            dib = vindaugaDibFromImage(QGuiApplication::clipboard()->image());
+    }
+
+    const bool isEcho = m_impl->remoteApplied && text == m_impl->remoteAppliedText &&
+                        html == m_impl->remoteAppliedHtml && dib == m_impl->remoteAppliedDib;
+    if (!isEcho)
+        m_impl->remoteApplied = false; // a genuine local change ends the echo window
+    {
+        QMutexLocker lock(&m_impl->clipboardMutex);
+        m_impl->clipboardText = text;
+        m_impl->clipboardHtml = html;
+        m_impl->clipboardDib = dib;
+    }
+    if (announce && !isEcho)
+        QMetaObject::invokeMethod(this, "announceLocalClipboard", Qt::QueuedConnection);
 }
 
 // Runs on the worker thread; never called synchronously from
 // vindaugaCliprdrServerFormatList (which runs on cliprdr's dedicated channel thread). See
 // RdpSession.h for why a synchronous ClientFormatDataRequest from there crashes the
 // connection.
-void RdpSession::requestRemoteClipboardText() {
+void RdpSession::requestRemoteClipboard(std::vector<uint32_t> formats) {
+    if (formats.empty())
+        return;
+    uint32_t first;
+    uint64_t generation;
+    {
+        QMutexLocker lock(&m_impl->remoteRequestMutex);
+        if (m_impl->remoteRequestInFlight) {
+            m_impl->queuedRemoteJob = std::move(formats); // newest wins; started from the response
+            return;
+        }
+        m_impl->remoteRequestInFlight = true;
+        m_impl->remoteJob = std::move(formats);
+        m_impl->queuedRemoteJob.clear();
+        m_impl->remoteData = {};
+        first = m_impl->remoteJob.front();
+        generation = ++m_impl->remoteGeneration;
+    }
+    sendRemoteClipboardRequest(first, generation);
+}
+
+// Worker thread. Sends one FORMAT_DATA_REQUEST; a failed send counts as a failed response.
+void RdpSession::sendRemoteClipboardRequest(uint32_t formatId, uint64_t generation) {
+    {
+        QMutexLocker lock(&m_impl->remoteRequestMutex);
+        if (generation != m_impl->remoteGeneration || !m_impl->remoteRequestInFlight ||
+            m_impl->remoteJob.empty() || m_impl->remoteJob.front() != formatId)
+            return; // the job this send belonged to was reset or replaced
+    }
     auto* vctx = reinterpret_cast<VindaugaRdpContext*>(m_impl->context);
-    if (!vctx || !vctx->cliprdr)
+    if (vctx && vctx->cliprdr) {
+        CLIPRDR_FORMAT_DATA_REQUEST request = {};
+        request.common.msgType = CB_FORMAT_DATA_REQUEST;
+        request.requestedFormatId = formatId;
+        if (vctx->cliprdr->ClientFormatDataRequest(vctx->cliprdr, &request) == CHANNEL_RC_OK)
+            return;
+        qCWarning(lcRdp) << "CliprdrClientContext::ClientFormatDataRequest failed";
+    }
+    onRemoteClipboardResponse(nullptr, 0, false, generation);
+}
+
+// Called on the cliprdr channel thread when a response arrives (or on the worker if a send
+// failed). Decodes it, then either asks for the job's next format, switches to a newer
+// queued job, or applies the finished result to the local clipboard.
+void RdpSession::onRemoteClipboardResponse(const uint8_t* data, uint32_t length, bool ok,
+                                           uint64_t expectedGeneration) {
+    uint32_t id = 0;
+    uint64_t entryGeneration = 0;
+    {
+        QMutexLocker lock(&m_impl->remoteRequestMutex);
+        if (!m_impl->remoteRequestInFlight || m_impl->remoteJob.empty())
+            return; // nothing outstanding (e.g. a response from before a reconnect)
+        if (expectedGeneration && expectedGeneration != m_impl->remoteGeneration)
+            return; // a failed send for a job that has since been reset or replaced
+        id = m_impl->remoteJob.front();
+        entryGeneration = m_impl->remoteGeneration;
+    }
+
+    RemoteClipboardData part;
+    if (ok && data && length > 0) {
+        if (id == CF_DIB) {
+            part.image = vindaugaImageFromDib(
+                QByteArray(reinterpret_cast<const char*>(data), static_cast<qsizetype>(length)));
+            part.hasImage = !part.image.isNull();
+            if (!part.hasImage)
+                qCWarning(lcRdp) << "Could not decode clipboard CF_DIB from the server";
+        } else if (id == CF_UNICODETEXT) {
+            // Null-terminated UTF-16 little-endian on the wire, which matches the host's
+            // native byte order on x86/x86_64, so no conversion is needed.
+            const auto* utf16Data = reinterpret_cast<const char16_t*>(data);
+            size_t len = length / 2;
+            while (len > 0 && utf16Data[len - 1] == 0)
+                --len; // strip trailing null terminator(s)
+            part.text = QString::fromUtf16(utf16Data, static_cast<int>(len));
+            part.hasText = true;
+        } else {
+            QByteArray raw(reinterpret_cast<const char*>(data), static_cast<qsizetype>(length));
+            while (raw.endsWith('\0'))
+                raw.chop(1);
+            part.html = vindaugaHtmlFromCfHtml(raw);
+            part.hasHtml = !part.html.isEmpty();
+        }
+    }
+
+    uint32_t sendNext = 0;
+    uint64_t generation = 0;
+    bool finished = false;
+    RemoteClipboardData result;
+    {
+        QMutexLocker lock(&m_impl->remoteRequestMutex);
+        if (!m_impl->remoteRequestInFlight || m_impl->remoteJob.empty() ||
+            m_impl->remoteJob.front() != id || m_impl->remoteGeneration != entryGeneration)
+            return; // reset or replaced while decoding
+        RemoteClipboardData& acc = m_impl->remoteData;
+        if (part.hasText) { acc.hasText = true; acc.text = part.text; }
+        if (part.hasHtml) { acc.hasHtml = true; acc.html = part.html; }
+        if (part.hasImage) { acc.hasImage = true; acc.image = part.image; }
+        m_impl->remoteJob.erase(m_impl->remoteJob.begin());
+
+        if (!m_impl->queuedRemoteJob.empty()) {
+            // A newer clipboard owner appeared: what we hold is stale, so drop it.
+            m_impl->remoteJob = std::move(m_impl->queuedRemoteJob);
+            m_impl->queuedRemoteJob.clear();
+            m_impl->remoteData = {};
+            sendNext = m_impl->remoteJob.front();
+            ++m_impl->remoteGeneration;
+        } else if (!m_impl->remoteJob.empty()) {
+            sendNext = m_impl->remoteJob.front();
+        } else {
+            m_impl->remoteRequestInFlight = false;
+            result = std::move(m_impl->remoteData);
+            m_impl->remoteData = {};
+            finished = true;
+        }
+        generation = m_impl->remoteGeneration;
+    }
+
+    if (sendNext) {
+        // Leave the channel thread's call stack before sending, as everywhere else.
+        QMetaObject::invokeMethod(
+            this, [this, sendNext, generation]() { sendRemoteClipboardRequest(sendNext, generation); },
+            Qt::QueuedConnection);
+    }
+    if (!finished || !(result.hasText || result.hasHtml || result.hasImage))
         return;
 
-    CLIPRDR_FORMAT_DATA_REQUEST request = {};
-    request.common.msgType = CB_FORMAT_DATA_REQUEST;
-    request.requestedFormatId = CF_UNICODETEXT;
-    if (vctx->cliprdr->ClientFormatDataRequest(vctx->cliprdr, &request) != CHANNEL_RC_OK)
-        qCWarning(lcRdp) << "CliprdrClientContext::ClientFormatDataRequest failed";
+    // QClipboard is a GUI-thread API, so hop there. Non-blocking: nothing to wait for, and
+    // a slow GUI-thread event queue must not stall the channel. The QPointer keeps a queued
+    // update from touching a session destroyed in the meantime.
+    QMetaObject::invokeMethod(qApp, [guard = QPointer<RdpSession>(this), generation,
+                                     result = std::move(result)]() {
+        if (!guard || guard->m_impl->remoteGeneration != generation)
+            return; // a newer fetch started or the channel was reset meanwhile
+        auto* mime = new QMimeData;
+        Impl& impl = *guard->m_impl;
+        impl.remoteApplied = true;
+        impl.remoteAppliedText.clear();
+        impl.remoteAppliedHtml.clear();
+        impl.remoteAppliedDib.clear();
+        if (result.hasImage) {
+            mime->setImageData(result.image);
+            impl.remoteAppliedDib = vindaugaDibFromImage(result.image);
+        } else {
+            if (result.hasText) {
+                mime->setText(result.text);
+                impl.remoteAppliedText = result.text;
+            }
+            if (result.hasHtml) {
+                mime->setHtml(result.html);
+                impl.remoteAppliedHtml = result.html;
+            }
+        }
+        QGuiApplication::clipboard()->setMimeData(mime);
+    });
+}
+
+// Drops any outstanding or queued fetch, e.g. when the channel (re)connects: a fresh channel
+// cannot answer a request sent on the old one.
+void RdpSession::resetRemoteClipboardRequests() {
+    QMutexLocker lock(&m_impl->remoteRequestMutex);
+    m_impl->remoteRequestInFlight = false;
+    m_impl->remoteJob.clear();
+    m_impl->queuedRemoteJob.clear();
+    m_impl->remoteData = {};
+    ++m_impl->remoteGeneration;
 }
 
 // Runs on the worker thread; never called synchronously from
 // vindaugaCliprdrServerFormatDataRequest, for the same reason as above.
-void RdpSession::respondWithLocalClipboardText() {
+void RdpSession::respondWithLocalClipboard(uint32_t formatId) {
     auto* vctx = reinterpret_cast<VindaugaRdpContext*>(m_impl->context);
     if (!vctx || !vctx->cliprdr)
         return;
 
-    const QByteArray data = localClipboardTextUtf16();
+    const QByteArray data = localClipboardData(formatId);
     CLIPRDR_FORMAT_DATA_RESPONSE response = {};
     response.common.msgType = CB_FORMAT_DATA_RESPONSE;
     response.common.msgFlags = data.isEmpty() ? CB_RESPONSE_FAIL : CB_RESPONSE_OK;
@@ -1494,32 +1952,20 @@ void RdpSession::respondWithLocalClipboardText() {
         qCWarning(lcRdp) << "CliprdrClientContext::ClientFormatDataResponse failed";
 }
 
-void RdpSession::setLocalClipboardText(const QString& text) {
-    // Called from the worker thread (cliprdr ServerFormatDataResponse callback).
-    // QClipboard is a GUI-thread API, so hop there. Non-blocking: nothing to wait for, and
-    // a slow GUI-thread event queue must not stall the RDP event loop.
-    QMetaObject::invokeMethod(qApp, [this, text]() {
-        m_impl->ignoringNextClipboardChange = true; // see the dataChanged listener in the constructor
-        QGuiApplication::clipboard()->setText(text);
-    });
-}
-
-QByteArray RdpSession::localClipboardTextUtf16() const {
-    // Called from the worker thread (cliprdr ServerFormatDataRequest callback), which must
-    // return the data synchronously: a blocking GUI-thread hop, unlike
-    // setLocalClipboardText.
-    QString text;
-    QMetaObject::invokeMethod(
-        qApp, [&text]() { text = QGuiApplication::clipboard()->text(); },
-        Qt::BlockingQueuedConnection);
-
-    if (text.isEmpty())
+// Serves a server data request from the snapshot; never touches QClipboard, so it cannot
+// block on (or deadlock with) the GUI thread.
+QByteArray RdpSession::localClipboardData(uint32_t formatId) const {
+    QMutexLocker lock(&m_impl->clipboardMutex);
+    if (formatId == CF_DIB)
+        return m_impl->clipboardDib;
+    if (formatId == kLocalHtmlFormatId)
+        return vindaugaCfHtmlFromHtml(m_impl->clipboardHtml);
+    if (m_impl->clipboardText.isEmpty())
         return {};
     // CF_UNICODETEXT: null-terminated UTF-16 on the wire. QString's internal buffer is
-    // already null-terminated at text.size(), so +1 character (2 bytes) captures the
-    // terminator.
-    return QByteArray(reinterpret_cast<const char*>(text.utf16()),
-                      static_cast<int>((text.size() + 1) * 2));
+    // already null-terminated at size(), so +1 character (2 bytes) captures the terminator.
+    return QByteArray(reinterpret_cast<const char*>(m_impl->clipboardText.utf16()),
+                      static_cast<int>((m_impl->clipboardText.size() + 1) * 2));
 }
 
 } // namespace vindauga
