@@ -6,6 +6,7 @@
 #include <QKeyEvent>
 #include <QMetaObject>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPixmap>
 #include <QQuickWindow>
 #include <QWheelEvent>
@@ -83,6 +84,8 @@ void RdpItem::connectToSession(const QString& rdpText, const QString& connection
     m_desktopSize = QSize();
     m_pendingFrames.clear();
     m_pendingRenderPatches.clear();
+    m_pendingPatchBytes = 0;
+    m_mirror = QImage();
     m_pressedInput.clear();
     update();
 
@@ -194,6 +197,7 @@ QSGNode* RdpItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
     // m_pendingRenderPatches is usually empty for a pure geometry update.
     node->setContent(boundingRect(), m_desktopSize, m_pendingRenderPatches);
     m_pendingRenderPatches.clear();
+    m_pendingPatchBytes = 0;
     return node;
 }
 
@@ -228,8 +232,41 @@ void RdpItem::drainPendingFrames() {
     // m_pendingRenderPatches (consumed by updatePaintNode()), and RdpRenderNode uploads
     // it straight into the GPU texture. Only one update() round per burst, not one per
     // incoming frame.
+    if (m_desktopSize.isValid() && !m_desktopSize.isEmpty() &&
+        m_mirror.size() != m_desktopSize) {
+        m_mirror = QImage(m_desktopSize, QImage::Format_ARGB32);
+        m_mirror.fill(Qt::black);
+    }
+    if (!m_mirror.isNull()) {
+        QPainter painter(&m_mirror);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        for (const auto& [image, rect] : m_pendingFrames)
+            painter.drawImage(rect.topLeft(), image);
+    }
+    for (const auto& frame : m_pendingFrames)
+        m_pendingPatchBytes += frame.first.sizeInBytes();
     m_pendingRenderPatches.append(m_pendingFrames);
     m_pendingFrames.clear();
+
+    if (m_pendingPatchBytes > kMaxPendingPatchBytes && !m_mirror.isNull()) {
+        QRect bounds;
+        for (const auto& frame : m_pendingRenderPatches)
+            bounds = bounds.united(frame.second);
+        bounds = bounds.intersected(m_mirror.rect());
+        const qsizetype dropped = m_pendingRenderPatches.size();
+        m_pendingRenderPatches.clear();
+        if (!bounds.isEmpty()) {
+            m_pendingRenderPatches.append({m_mirror.copy(bounds), bounds});
+            m_pendingPatchBytes = m_pendingRenderPatches.constFirst().first.sizeInBytes();
+        } else {
+            m_pendingPatchBytes = 0;
+        }
+        ++m_collapseCount;
+        if (m_collapseCount <= 3 || m_collapseCount % 100 == 0)
+            qCInfo(lcRdp) << "Frame queue passed" << kMaxPendingPatchBytes / (1024 * 1024)
+                          << "MiB (window probably not being drawn); collapsed" << dropped
+                          << "patches into" << bounds << "- collapse #" << m_collapseCount;
+    }
     update();
 }
 
@@ -250,6 +287,10 @@ void RdpItem::onDesktopResized(QSize size) {
         m_desktopSize = size;
         m_pendingFrames.clear();
         m_pendingRenderPatches.clear();
+        m_pendingPatchBytes = 0;
+        m_mirror = QImage();
+        m_sinceResize.start();
+        applyCursor();
         update();
     }
 }
@@ -257,23 +298,62 @@ void RdpItem::onDesktopResized(QSize size) {
 void RdpItem::onCursorChanged(const QImage& image, const QPoint& hotspot) {
     if (image.isNull())
         return;
-    QPixmap pixmap = QPixmap::fromImage(image);
-    // The image is in remote pixel size (m_desktopSize), which is not necessarily 1:1
-    // with the item's logical coordinates (RdpRenderNode draws the desktop scaled to
-    // boundingRect(); see mapToRemote). Apply the same scale via
-    // QPixmap::setDevicePixelRatio() so Qt shows the pointer (and places its hotspot) in
-    // item size rather than raw remote pixels.
-    if (!m_desktopSize.isEmpty() && width() > 0) {
-        const qreal dpr = static_cast<qreal>(m_desktopSize.width()) / width();
-        if (dpr > 0)
-            pixmap.setDevicePixelRatio(dpr);
-    }
-    setCursor(QCursor(pixmap, hotspot.x(), hotspot.y()));
+    m_cursorMode = CursorMode::Image;
+    m_cursorImage = image;
+    m_cursorHotspot = hotspot;
+    if (m_sinceResize.isValid() && m_sinceResize.elapsed() < 10000)
+        qCInfo(lcRdp) << "Cursor shape from server" << image.size() << "hotspot" << hotspot
+                      << m_sinceResize.elapsed() << "ms after resize";
+    applyCursor();
 }
 
-void RdpItem::onCursorHidden() { setCursor(Qt::BlankCursor); }
+void RdpItem::onCursorHidden() {
+    m_cursorMode = CursorMode::Hidden;
+    if (m_sinceResize.isValid() && m_sinceResize.elapsed() < 10000)
+        qCInfo(lcRdp) << "Server hid the cursor" << m_sinceResize.elapsed() << "ms after resize";
+    applyCursor();
+}
 
-void RdpItem::onCursorReset() { unsetCursor(); }
+void RdpItem::onCursorReset() {
+    m_cursorMode = CursorMode::Default;
+    if (m_sinceResize.isValid() && m_sinceResize.elapsed() < 10000)
+        qCInfo(lcRdp) << "Server reset the cursor to default" << m_sinceResize.elapsed()
+                      << "ms after resize";
+    applyCursor();
+}
+
+void RdpItem::applyCursor() {
+    switch (m_cursorMode) {
+    case CursorMode::Default:
+        unsetCursor();
+        return;
+    case CursorMode::Hidden:
+        setCursor(Qt::BlankCursor);
+        return;
+    case CursorMode::Image:
+        break;
+    }
+    // The image is in remote pixel size (m_desktopSize), which is not necessarily 1:1
+    // with the item's logical coordinates (RdpRenderNode draws the desktop scaled to
+    // boundingRect(); see mapToRemote), so the pointer is scaled by the same ratio. Done on
+    // the image itself instead of through QPixmap::setDevicePixelRatio(): a fractional
+    // ratio just below 1 (the server rounds 1261 to 1260 wide) left the pointer invisible
+    // on Wayland. Within 2% of 1:1 the image is used unscaled.
+    QImage image = m_cursorImage;
+    QPoint hotspot = m_cursorHotspot;
+    qreal ratio = 1.0;
+    if (!m_desktopSize.isEmpty() && width() > 0)
+        ratio = width() / static_cast<qreal>(m_desktopSize.width());
+    if (qAbs(ratio - 1.0) > 0.02 && ratio > 0.0) {
+        const QSize target(qMax(1, qRound(image.width() * ratio)),
+                           qMax(1, qRound(image.height() * ratio)));
+        image = image.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        hotspot = QPoint(qRound(hotspot.x() * ratio), qRound(hotspot.y() * ratio));
+    }
+    if (m_sinceResize.isValid() && m_sinceResize.elapsed() < 10000)
+        qCInfo(lcRdp) << "applyCursor: ratio" << ratio << "->" << image.size() << "hotspot" << hotspot;
+    setCursor(QCursor(QPixmap::fromImage(image), hotspot.x(), hotspot.y()));
+}
 
 QPoint RdpItem::mapToRemote(const QPointF& itemPos) const {
     if (m_desktopSize.isEmpty() || width() <= 0 || height() <= 0)
@@ -434,6 +514,8 @@ void RdpItem::releaseHeldInput() {
 
 void RdpItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
     QQuickItem::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size())
+        applyCursor();
     if (m_session && m_connected && newGeometry.size() != oldGeometry.size()) {
         // Do not send a resize request for every intermediate geometry during a window
         // drag or WM animation; only once the geometry has been unchanged for the timer

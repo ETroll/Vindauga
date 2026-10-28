@@ -37,6 +37,9 @@ void RdpRenderNode::setContent(const QRectF& itemRect, const QSize& desktopSize,
     }
     if (m_desktopSize != desktopSize) {
         m_desktopSize = desktopSize;
+        // Patches queued for the previous size no longer fit. This is the only place they
+        // are dropped: patches handed in below already belong to the new size.
+        m_pendingPatches.clear();
         markDirty(QSGNode::DirtyMaterial);
     }
     if (!patches.isEmpty()) {
@@ -119,10 +122,6 @@ void RdpRenderNode::rebuildTextureIfNeeded(QRhi* rhi, QRhiResourceUpdateBatch* u
     black.fill(Qt::black);
     const QRhiTextureSubresourceUploadDescription blackSub(black);
     updates->uploadTexture(m_texture.get(), QRhiTextureUploadDescription({QRhiTextureUploadEntry(0, 0, blackSub)}));
-
-    // Pending patches from before the resize refer to a region that is now invalid
-    // (wrong size); discard them. The server sends a full update after a desktop resize.
-    m_pendingPatches.clear();
 }
 
 void RdpRenderNode::ensurePipeline(QRhi* rhi) {
