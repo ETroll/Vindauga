@@ -3,6 +3,21 @@
 Notable changes per release. The git history before 1.2.5 was squashed into the first
 commit, so 1.2.5 is the earliest entry.
 
+## 1.5.1 — 2026-10-30
+
+- Fix very high memory use in long sessions (4 GB after seven hours seen): screen updates
+  queued up without limit while the window was not being drawn (another workspace,
+  minimised). The queue is now capped at 32 MiB and collapsed into one frame.
+- Fix a broken picture after resizing the window back and forth: the first full update for
+  the new size could be discarded, leaving only scattered patches.
+- Fix the mouse pointer becoming invisible after a resize (server rounds the width to an
+  even number, which left the pointer scaled by a fractional ratio).
+- Drive redirection (`drivestoredirect:s:*`) is now always off: FreeRDP re-registered the
+  gvfs mount every second, and it exposed every host mount to the remote session.
+- USB redirection (`usbdevicestoredirect:s:*`) is now always off: plugging in a USB device
+  crashed the process inside FreeRDP's urbdrc channel. Camera, microphone and audio are
+  unaffected.
+
 ## 1.5.0 — 2026-10-27
 
 - Clipboard redirection is back (it had been off since 1.2.5): copy and paste of text,
