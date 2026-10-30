@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 #include <QImage>
 #include <QList>
 #include <QQuickItem>
@@ -187,6 +188,28 @@ private:
     // separate from m_pendingFrames because it can accumulate over several bursts before
     // the scene graph's sync phase actually runs (sync is not synchronous with update()).
     QList<std::pair<QImage, QRect>> m_pendingRenderPatches;
+
+    // CPU copy of the whole remote desktop, kept in step with every patch (GUI thread only).
+    // Qt does not render a window that is not on screen (another workspace, minimised), so
+    // updatePaintNode() stops draining m_pendingRenderPatches while FreeRDP keeps producing
+    // damage regions. When the queue passes kMaxPendingPatchBytes it is collapsed into one
+    // patch cut from this mirror, which bounds the memory to roughly one desktop frame plus
+    // the cap without losing any pixels.
+    // Last pointer state from the server, re-applied whenever the desktop or item size
+    // changes: the QCursor pixmap carries a devicePixelRatio computed from both sizes, so a
+    // cursor set during a resize would otherwise stay mis-scaled (possibly invisible) until
+    // the server happens to send a new shape.
+    enum class CursorMode { Default, Hidden, Image };
+    void applyCursor();
+    CursorMode m_cursorMode = CursorMode::Default;
+    QImage m_cursorImage;
+    QPoint m_cursorHotspot;
+    QElapsedTimer m_sinceResize;
+
+    QImage m_mirror;
+    qint64 m_pendingPatchBytes = 0;
+    qint64 m_collapseCount = 0;
+    static constexpr qint64 kMaxPendingPatchBytes = 32 * 1024 * 1024;
 };
 
 } // namespace vindauga

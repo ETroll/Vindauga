@@ -1145,6 +1145,26 @@ RdpSession::RdpSession(QString rdpText, QString aadToken, QObject* parent)
     // overrides redirectsmartcards:i:1 from the .rdp file.
     freerdp_settings_set_bool(context->settings, FreeRDP_RedirectSmartCards, FALSE);
 
+    // Drive redirection is not a Vindauga feature, and drivestoredirect:s:* (what AVD feeds
+    // serve) makes FreeRDP poll the host's mounts once a second and re-register them as new
+    // devices: with the gvfs FUSE mount present that is one leaked device per second, about
+    // 4 GB of RSS after seven hours. It would also expose every host mount to the VM.
+    freerdp_settings_set_bool(context->settings, FreeRDP_RedirectDrives, FALSE);
+    freerdp_settings_set_bool(context->settings, FreeRDP_RedirectHomeDrive, FALSE);
+    freerdp_settings_set_string(context->settings, FreeRDP_DrivesToRedirect, nullptr);
+    // Same for USB redirection (usbdevicestoredirect:s:* in AVD feeds): urbdrc opens every
+    // USB device that is plugged in, and plugging in an Apple MagSafe case crashed FreeRDP's
+    // libusb event thread (ArrayList_Count on a null list), taking the whole process down.
+    // Camera, microphone and audio use their own channels (rdpecam, audin, rdpsnd) and do
+    // not depend on this one.
+    (void) freerdp_dynamic_channel_collection_del(context->settings, "urbdrc");
+    (void) freerdp_static_channel_collection_del(context->settings, "urbdrc");
+    while (RDPDR_DEVICE* drive =
+               freerdp_device_collection_find_type(context->settings, RDPDR_DTYP_FILESYSTEM)) {
+        if (!freerdp_device_collection_del(context->settings, drive))
+            break;
+    }
+
     // CONNECTION_TYPE_LAN is a static capability/Experience hint that may nudge the
     // server towards higher image quality. NetworkAutoDetect must stay enabled: the AVD
     // gateway sends an RTT Measure Request PDU regardless, and with auto-detect disabled
