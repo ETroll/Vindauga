@@ -1152,6 +1152,13 @@ RdpSession::RdpSession(QString rdpText, QString aadToken, QObject* parent)
     freerdp_settings_set_bool(context->settings, FreeRDP_RedirectDrives, FALSE);
     freerdp_settings_set_bool(context->settings, FreeRDP_RedirectHomeDrive, FALSE);
     freerdp_settings_set_string(context->settings, FreeRDP_DrivesToRedirect, nullptr);
+    // Same for USB redirection (usbdevicestoredirect:s:* in AVD feeds): urbdrc opens every
+    // USB device that is plugged in, and plugging in an Apple MagSafe case crashed FreeRDP's
+    // libusb event thread (ArrayList_Count on a null list), taking the whole process down.
+    // Camera, microphone and audio use their own channels (rdpecam, audin, rdpsnd) and do
+    // not depend on this one.
+    (void) freerdp_dynamic_channel_collection_del(context->settings, "urbdrc");
+    (void) freerdp_static_channel_collection_del(context->settings, "urbdrc");
     while (RDPDR_DEVICE* drive =
                freerdp_device_collection_find_type(context->settings, RDPDR_DTYP_FILESYSTEM)) {
         if (!freerdp_device_collection_del(context->settings, drive))
