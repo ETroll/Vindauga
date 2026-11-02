@@ -3,14 +3,19 @@
 Notable changes per release. The git history before 1.2.5 was squashed into the first
 commit, so 1.2.5 is the earliest entry.
 
-## Unreleased
+## 1.6.0 — 2026-11-02
 
 - Update check: Vindauga looks for a newer release on GitHub at most once a day and shows a
   banner on the start page. **Update now** downloads the package for your system, verifies
   it against GitHub's SHA-256 digest, installs it through a polkit password prompt
   (`pkexec`; if no prompt can be shown, the command to run by hand is displayed) and
-  restarts the app. **Later**, **Skip this version** and **What's new** (the release notes in a
-  dialog; the release workflow now uses this changelog as the release text) are on the banner. The check can be turned off in Settings → Updates (which also has **Check now**).
+  restarts the app. Only copies installed from the `.deb` or Arch package can update
+  themselves; other builds just get the notice.
+- The banner also has **Later**, **Skip this version** and **What's new**, which shows the
+  changelog for every version you would get in a dialog.
+- The check can be turned off in Settings → Updates, which also has **Check now**.
+  Settings has a new About section showing the installed version.
+- Release notes on GitHub are now taken from this changelog.
 
 ## 1.5.2 — 2026-11-02
 
