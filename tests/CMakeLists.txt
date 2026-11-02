@@ -32,6 +32,10 @@ qt_add_executable(test_pressedinputtracker test_pressedinputtracker.cpp)
 target_link_libraries(test_pressedinputtracker PRIVATE vindauga_core Qt6::Test Qt6::Core)
 add_test(NAME pressedinputtracker COMMAND test_pressedinputtracker)
 
+qt_add_executable(test_update test_update.cpp)
+target_link_libraries(test_update PRIVATE vindauga_core Qt6::Test Qt6::Core)
+add_test(NAME update COMMAND test_update)
+
 if(VINDAUGA_WITH_RDP)
     qt_add_executable(test_rdpsession test_rdpsession.cpp)
     target_link_libraries(test_rdpsession PRIVATE vindauga_core Qt6::Test Qt6::Core)

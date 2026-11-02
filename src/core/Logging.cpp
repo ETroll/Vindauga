@@ -23,6 +23,7 @@ Q_LOGGING_CATEGORY(lcFeed, "vindauga.feed")
 Q_LOGGING_CATEGORY(lcRdp, "vindauga.rdp")
 Q_LOGGING_CATEGORY(lcConnections, "vindauga.connections")
 Q_LOGGING_CATEGORY(lcX11, "vindauga.x11")
+Q_LOGGING_CATEGORY(lcUpdate, "vindauga.update")
 
 namespace vindauga {
 

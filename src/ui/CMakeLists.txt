@@ -16,6 +16,8 @@ set(VINDAUGA_UI_SOURCES
     backend/ConnectionListModel.cpp
     backend/ResourceListModel.h
     backend/ResourceListModel.cpp
+    backend/UpdateController.h
+    backend/UpdateController.cpp
 )
 
 # AadWebAuthenticator needs Qt6::WebEngineQuick; these sources are only built when
@@ -59,6 +61,7 @@ qt_add_qml_module(vindauga_ui
         qml/ConnectionsPage.qml
         qml/SessionPage.qml
         qml/SettingsPage.qml
+        qml/UpdateBanner.qml
     SOURCES
         ${VINDAUGA_UI_SOURCES}
 )

@@ -10,6 +10,7 @@ ApplicationWindow {
     title: qsTr("Vindauga")
 
     AppController { id: app }
+    UpdateController { id: updater }
 
     // The sign-in web view is overlaid on this window rather than opened separately.
     Component.onCompleted: app.setHostWindow(root)

@@ -9,7 +9,7 @@
 # `sha256sums=('SKIP')` is deliberate for the same reason: the tarball is generated
 # locally, so there is no fixed upstream checksum to pin.
 pkgname=vindauga
-pkgver=1.5.2
+pkgver=1.6.0
 pkgrel=1
 pkgdesc="Native Linux client for Azure Virtual Desktop / Windows 365"
 arch=('x86_64')
@@ -39,6 +39,9 @@ depends=(
     'libxkbcommon'
     'libxcb'
 )
+# pkexec, for "Update now" in the app (a polkit password prompt); without it the app shows
+# the pacman command to run by hand.
+optdepends=('polkit: install updates from inside the app')
 makedepends=(
     'cmake'
     'ninja'
