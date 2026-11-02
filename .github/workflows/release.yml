@@ -20,6 +20,18 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
+      # Vindauga targets Omarchy (see README badge), which pins core/extra/multilib to its
+      # own snapshot mirror rather than tracking Arch live - it lags plain Arch by some
+      # days. PKGBUILD's _qtver() bakes in whatever Qt version pacman sees on THIS machine
+      # as the package's minimum dependency, so building against archlinux:latest's
+      # default (live Arch) mirrorlist can require a qt6-webengine/qt6-base newer than
+      # Omarchy has shipped yet, making the release uninstallable there (e.g. v1.5.1
+      # required qt6-webengine>=6.11.3 while Omarchy's mirror still had 6.11.2). Pointing
+      # the mirrorlist at Omarchy's own mirror makes the build see the same package
+      # versions a real Omarchy install would, so the computed minimums stay installable.
+      - name: Point pacman at Omarchy's mirror (see comment above)
+        run: echo 'Server = https://stable-mirror.omarchy.org/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+
       # github-cli: the archlinux:latest CONTAINER replaces the whole runner toolchain,
       # including the gh preinstalled on the ubuntu-latest HOST, so gh must be installed
       # explicitly here.

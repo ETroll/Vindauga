@@ -3,6 +3,12 @@
 Notable changes per release. The git history before 1.2.5 was squashed into the first
 commit, so 1.2.5 is the earliest entry.
 
+## 1.5.2 — 2026-11-02
+
+- Fix the Arch package requiring a `qt6-webengine` version newer than Omarchy has shipped
+  yet (`unable to satisfy dependency`). The release build now builds against Omarchy's own
+  package mirror instead of plain Arch, so the computed dependency floor stays installable.
+
 ## 1.5.1 — 2026-10-30
 
 - Fix very high memory use in long sessions (4 GB after seven hours seen): screen updates
