@@ -20,6 +20,12 @@ set(VINDAUGA_CORE_SOURCES
     Settings/AppSettings.h
     Settings/AppSettings.cpp
     Rdp/PressedInputTracker.h
+    Update/UpdateChecker.h
+    Update/UpdateChecker.cpp
+    Update/UpdateDownloader.h
+    Update/UpdateDownloader.cpp
+    Update/UpdateInstaller.h
+    Update/UpdateInstaller.cpp
 )
 
 # RdpSession needs libfreerdp and is only built when VINDAUGA_WITH_RDP is ON.

@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <QtGlobal>
 
 // Application-wide settings (as opposed to ConnectionStore, which holds saved
 // connections). Pure core/, no Qt Quick/GUI dependency.
@@ -59,7 +60,23 @@ public:
     QString signInUserAgent() const;
     void setSignInUserAgent(QString value);
 
+    // Update check (UpdateController). On by default; the user can turn it off. The
+    // remaining values are bookkeeping that keeps the check to at most one request a day
+    // and backs off after failures: Unix seconds, 0 = never / not set.
+    bool checkForUpdates() const;
+    void setCheckForUpdates(bool value);
+    qint64 updateLastCheck() const;
+    void setUpdateLastCheck(qint64 secsSinceEpoch);
+    qint64 updateNextAttempt() const;
+    void setUpdateNextAttempt(qint64 secsSinceEpoch);
+    int updateFailures() const;
+    void setUpdateFailures(int value);
+    // Version the user chose "Skip this version" for; empty = none.
+    QString updateSkippedVersion() const;
+    void setUpdateSkippedVersion(QString value);
+
 signals:
+    void checkForUpdatesChanged();
     void useDisplayScaleFactorChanged();
     void hardwareVideoDecodingChanged();
     void preferredVaapiDeviceChanged();

@@ -19,6 +19,29 @@ private slots:
         QVERIFY(settings.signInUserAgent().isEmpty());
     }
 
+    void updateSettings() {
+        QTemporaryDir dir;
+        const QString path = dir.path() + QStringLiteral("/settings.ini");
+        AppSettings settings(path);
+        QVERIFY(settings.checkForUpdates()); // on by default
+        QCOMPARE(settings.updateLastCheck(), 0);
+        QCOMPARE(settings.updateFailures(), 0);
+        QSignalSpy spy(&settings, &AppSettings::checkForUpdatesChanged);
+        settings.setCheckForUpdates(false);
+        settings.setCheckForUpdates(false); // unchanged: no signal
+        QCOMPARE(spy.count(), 1);
+        settings.setUpdateLastCheck(1700000000);
+        settings.setUpdateNextAttempt(1700003600);
+        settings.setUpdateFailures(3);
+        settings.setUpdateSkippedVersion(QStringLiteral(" 1.6.0 "));
+        AppSettings reread(path);
+        QVERIFY(!reread.checkForUpdates());
+        QCOMPARE(reread.updateLastCheck(), 1700000000);
+        QCOMPARE(reread.updateNextAttempt(), 1700003600);
+        QCOMPARE(reread.updateFailures(), 3);
+        QCOMPARE(reread.updateSkippedVersion(), QStringLiteral("1.6.0"));
+    }
+
     void preventSessionLockIsClampedAndSignalled() {
         QTemporaryDir dir;
         AppSettings settings(dir.path() + QStringLiteral("/settings.ini"));

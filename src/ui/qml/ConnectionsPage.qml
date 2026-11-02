@@ -84,6 +84,11 @@ Page {
                 }
             }
 
+            // A newer version, or the progress of installing it.
+            UpdateBanner {
+                width: parent.width
+            }
+
             // Sign-in / feed problems (AADSTS explanations, unreachable feed, ...).
             Rectangle {
                 visible: app.feedStatus.length > 0

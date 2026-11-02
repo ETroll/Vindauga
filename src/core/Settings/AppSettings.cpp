@@ -25,6 +25,12 @@ constexpr auto kPreventSessionLockSecondsKey = "preventSessionLockSeconds";
 constexpr auto kFeedDiscoveryUrlKey = "feedDiscoveryUrl";
 constexpr auto kSignInUserAgentKey = "signInUserAgent";
 
+constexpr auto kCheckForUpdatesKey = "checkForUpdates";
+constexpr auto kUpdateLastCheckKey = "updateLastCheck";
+constexpr auto kUpdateNextAttemptKey = "updateNextAttempt";
+constexpr auto kUpdateFailuresKey = "updateFailures";
+constexpr auto kUpdateSkippedVersionKey = "updateSkippedVersion";
+
 } // namespace
 
 AppSettings::AppSettings(QString storagePath, QObject* parent)
@@ -127,6 +133,59 @@ void AppSettings::setSignInUserAgent(QString value) {
     QSettings settings(m_path, QSettings::IniFormat);
     settings.setValue(kSignInUserAgentKey, value);
     emit signInUserAgentChanged();
+}
+
+bool AppSettings::checkForUpdates() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return settings.value(kCheckForUpdatesKey, true).toBool();
+}
+
+void AppSettings::setCheckForUpdates(bool value) {
+    if (value == checkForUpdates())
+        return;
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kCheckForUpdatesKey, value);
+    emit checkForUpdatesChanged();
+}
+
+qint64 AppSettings::updateLastCheck() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return std::max<qint64>(0, settings.value(kUpdateLastCheckKey, 0).toLongLong());
+}
+
+void AppSettings::setUpdateLastCheck(qint64 secsSinceEpoch) {
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kUpdateLastCheckKey, secsSinceEpoch);
+}
+
+qint64 AppSettings::updateNextAttempt() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return std::max<qint64>(0, settings.value(kUpdateNextAttemptKey, 0).toLongLong());
+}
+
+void AppSettings::setUpdateNextAttempt(qint64 secsSinceEpoch) {
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kUpdateNextAttemptKey, secsSinceEpoch);
+}
+
+int AppSettings::updateFailures() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return std::clamp(settings.value(kUpdateFailuresKey, 0).toInt(), 0, 100);
+}
+
+void AppSettings::setUpdateFailures(int value) {
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kUpdateFailuresKey, std::clamp(value, 0, 100));
+}
+
+QString AppSettings::updateSkippedVersion() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return settings.value(kUpdateSkippedVersionKey, QString()).toString().trimmed();
+}
+
+void AppSettings::setUpdateSkippedVersion(QString value) {
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kUpdateSkippedVersionKey, value.trimmed());
 }
 
 } // namespace vindauga

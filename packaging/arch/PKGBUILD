@@ -39,6 +39,9 @@ depends=(
     'libxkbcommon'
     'libxcb'
 )
+# pkexec, for "Update now" in the app (a polkit password prompt); without it the app shows
+# the pacman command to run by hand.
+optdepends=('polkit: install updates from inside the app')
 makedepends=(
     'cmake'
     'ninja'

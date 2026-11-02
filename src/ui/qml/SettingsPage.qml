@@ -31,6 +31,47 @@ Page {
             width: parent.width
             spacing: 4
 
+            Label {
+                text: qsTr("Updates")
+                font.bold: true
+            }
+            CheckBox {
+                id: updateCheckbox
+                text: qsTr("Check for updates")
+                checked: updater.checkForUpdates
+                onClicked: updater.checkForUpdates = checked
+            }
+            Label {
+                width: parent.width
+                leftPadding: 32
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font.pixelSize: 12
+                text: qsTr("Looks for a new version on GitHub (github.com/ETroll/Vindauga) at most once a day, and tells you on the start page when there is one. Nothing is downloaded or installed until you choose «Update now». GitHub sees your IP address when Vindauga checks.")
+            }
+            Row {
+                leftPadding: 32
+                spacing: 12
+                Button {
+                    text: qsTr("Check now")
+                    enabled: !updater.checking
+                    onClicked: updater.checkNow()
+                }
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: 0.7
+                    font.pixelSize: 12
+                    text: updater.statusText.length > 0 ? updater.statusText
+                        : (isNaN(updater.lastChecked.getTime()) ? ""
+                           : qsTr("Last checked %1").arg(Qt.formatDateTime(updater.lastChecked, "ddd d MMM hh:mm")))
+                }
+            }
+        }
+
+        Column {
+            width: parent.width
+            spacing: 4
+
             CheckBox {
                 id: scaleCheckbox
                 text: qsTr("Use the display's scale factor (HiDPI)")
@@ -243,6 +284,28 @@ Page {
                 opacity: 0.7
                 font.pixelSize: 12
                 text: qsTr("User-Agent string sent by the embedded sign-in browser and the token requests. Some organisations' Conditional Access policies only admit certain platforms or browsers, which they recognise from this header. Leave empty unless sign-in is blocked with a 'device platform' message. Applies to the next sign-in.")
+            }
+        }
+
+        Column {
+            width: parent.width
+            spacing: 4
+
+            Label {
+                text: qsTr("About")
+                font.bold: true
+            }
+            Label {
+                text: qsTr("Vindauga %1").arg(app.version)
+            }
+            Label {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font.pixelSize: 12
+                textFormat: Text.StyledText
+                text: qsTr("Native Linux client for Azure Virtual Desktop and Windows 365. <a href=\"https://github.com/ETroll/Vindauga\">github.com/ETroll/Vindauga</a>")
+                onLinkActivated: (link) => Qt.openUrlExternally(link)
             }
         }
     }

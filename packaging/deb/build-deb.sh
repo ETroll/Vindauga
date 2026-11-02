@@ -206,7 +206,7 @@ Architecture: amd64
 Installed-Size: $INSTALLED_SIZE_KB
 Maintainer: Karl Løland <karl@folia.no>
 Depends: $DEPENDS
-Recommends: gnome-keyring | kwalletmanager
+Recommends: gnome-keyring | kwalletmanager, polkitd, pkexec
 Description: Native Linux client for Azure Virtual Desktop / Windows 365
  Vindauga is a native RDP client for Azure Virtual Desktop / Windows 365,
  built against a bundled Qt 6.11.2 (the distribution's own Qt is too old).

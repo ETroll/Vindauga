@@ -68,6 +68,7 @@ This has been tested with Azure Virtual Desktop host pools. Windows 365 uses the
 
 ## Usage notes
 
+- **Updates.** Vindauga checks GitHub for a new release at most once a day and shows a banner on the start page; **Update now** downloads, verifies and installs it (a system password prompt appears) and restarts the app. Turn the check off under Settings → Updates. Only copies installed from the `.deb`/Arch package can update themselves.
 - **Settings** (gear icon) lets you toggle HiDPI scaling, hardware decoding and the GPU device, set the frame buffer length, keep the session awake (synthetic mouse motion while idle, off by default), and, for tenants that need it, set the feed discovery URL (sovereign clouds) or the browser identity the sign-in presents (Conditional Access device-platform rules).
 - **Sign-in trouble?** The message under the header explains the Entra error in plain words and carries the `AADSTS` code for your IT department. `docs/feed-discovery.md` describes the whole flow.
 - **Logs** are written to `~/.local/state/vindauga/vindauga.log`. Start the app from a terminal with `vindauga --log-terminal --log-level=debug` to see them live. Secrets are never logged.
