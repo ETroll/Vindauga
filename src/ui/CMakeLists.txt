@@ -53,15 +53,23 @@ endif()
 # SessionPage.qml uses RdpItem, which only exists with VINDAUGA_WITH_RDP. That is the
 # top-level default, and the rest of the GUI makes no sense without RDP support, so
 # there is no conditional branch here.
+set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
 qt_add_qml_module(vindauga_ui
     URI Vindauga
     VERSION 1.0
     QML_FILES
+        qml/Theme.qml
         qml/Main.qml
         qml/ConnectionsPage.qml
         qml/SessionPage.qml
         qml/SettingsPage.qml
         qml/UpdateBanner.qml
+        qml/DButton.qml
+        qml/DSwitch.qml
+        qml/SvgIcon.qml
+        qml/SettingsSection.qml
+        qml/SettingsRow.qml
     SOURCES
         ${VINDAUGA_UI_SOURCES}
 )

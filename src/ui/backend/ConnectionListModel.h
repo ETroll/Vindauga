@@ -18,6 +18,7 @@ public:
         IdRole = Qt::UserRole + 1,
         DisplayNameRole,
         LastUsedAtRole,
+        AddedAtRole,
     };
 
     // The store is not owned by the model; the caller must keep it alive at least as

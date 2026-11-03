@@ -39,6 +39,10 @@ public:
     int frameBufferMs() const;
     void setFrameBufferMs(int value);
 
+    // Colour scheme of the UI: 0 = follow the desktop (default), 1 = light, 2 = dark.
+    int appearance() const;
+    void setAppearance(int value);
+
     // Seconds between the synthetic mouse movements FreeRDP sends while the user is idle
     // (FreeRDP_FakeMouseMotionInterval, "/prevent-session-lock" in xfreerdp), so neither
     // the AVD gateway's idle timeout nor the Windows lock screen kicks in during a long
@@ -81,6 +85,7 @@ signals:
     void hardwareVideoDecodingChanged();
     void preferredVaapiDeviceChanged();
     void frameBufferMsChanged();
+    void appearanceChanged();
     void preventSessionLockSecondsChanged();
     void feedDiscoveryUrlChanged();
     void signInUserAgentChanged();

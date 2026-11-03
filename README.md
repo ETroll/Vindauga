@@ -110,6 +110,16 @@ ctest --preset debug
 
 The packaging scripts under `packaging/` (`build-deb.sh`, `PKGBUILD`) are what the release workflow runs and double as a reference for a complete build.
 
+### Checking the UI without a session
+
+`--screenshot <file>` saves a PNG of the window and exits, which is handy for checking layout and the light/dark themes. `--page home|settings` picks the page and `--size WxH` the window size:
+
+```bash
+QT_QPA_PLATFORM=offscreen build/src/app/vindauga --screenshot settings.png --page settings --size 900x1800
+```
+
+The theme follows the Appearance setting in `settings.ini`; point `XDG_CONFIG_HOME` at a scratch directory to try the other scheme without touching your own settings.
+
 ## How it works, briefly
 
 The RDP session itself is standard RDP over Microsoft's Azure gateway, driven by libfreerdp. Everything around it is Qt: the Quick UI, the embedded WebEngine view that hosts the Entra ID sign-in, and QtKeychain for credential storage. Sign-in is OAuth authorization code + PKCE against Microsoft's public Remote Desktop client ID; the resulting refresh token mints the feed token and, at connect time, the gateway and session-host tokens FreeRDP asks for, so no browser is involved after the first sign-in. See `docs/feed-discovery.md`. Frames are uploaded to a persistent GPU texture in the Qt scene graph, so only the regions that changed are re-uploaded.

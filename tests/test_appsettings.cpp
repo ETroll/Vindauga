@@ -58,6 +58,22 @@ private slots:
         QCOMPARE(spy.count(), 3);
     }
 
+    void appearanceIsClampedAndSignalled() {
+        QTemporaryDir dir;
+        AppSettings settings(dir.path() + QStringLiteral("/settings.ini"));
+        QCOMPARE(settings.appearance(), 0);
+        QSignalSpy spy(&settings, &AppSettings::appearanceChanged);
+        settings.setAppearance(2);
+        QCOMPARE(settings.appearance(), 2);
+        QCOMPARE(spy.count(), 1);
+        settings.setAppearance(2); // unchanged: no signal
+        QCOMPARE(spy.count(), 1);
+        settings.setAppearance(9);
+        QCOMPARE(settings.appearance(), 2);
+        settings.setAppearance(-1);
+        QCOMPARE(settings.appearance(), 0);
+    }
+
     void textSettingsAreTrimmedAndPersisted() {
         QTemporaryDir dir;
         const QString path = dir.path() + QStringLiteral("/settings.ini");

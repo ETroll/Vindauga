@@ -54,6 +54,8 @@ class AppController : public QObject {
     // passed on to RdpItem by the session page.
     Q_PROPERTY(int frameBufferMs READ frameBufferMs WRITE setFrameBufferMs NOTIFY
                    frameBufferMsChanged)
+    // 0 = follow the desktop, 1 = light, 2 = dark (see Theme.qml).
+    Q_PROPERTY(int appearance READ appearance WRITE setAppearance NOTIFY appearanceChanged)
     Q_PROPERTY(int preventSessionLockSeconds READ preventSessionLockSeconds WRITE
                    setPreventSessionLockSeconds NOTIFY preventSessionLockSecondsChanged)
     Q_PROPERTY(QString feedDiscoveryUrl READ feedDiscoveryUrl WRITE setFeedDiscoveryUrl NOTIFY
@@ -94,6 +96,8 @@ public:
     QVariantList availableGpuDevices() const;
     int frameBufferMs() const;
     void setFrameBufferMs(int value);
+    int appearance() const;
+    void setAppearance(int value);
     int preventSessionLockSeconds() const;
     void setPreventSessionLockSeconds(int value);
     QString feedDiscoveryUrl() const;
@@ -142,6 +146,7 @@ signals:
     void hardwareVideoDecodingChanged();
     void preferredVaapiDeviceChanged();
     void frameBufferMsChanged();
+    void appearanceChanged();
     void preventSessionLockSecondsChanged();
     void feedDiscoveryUrlChanged();
     void signInUserAgentChanged();
