@@ -3,6 +3,20 @@
 Notable changes per release. The git history before 1.2.5 was squashed into the first
 commit, so 1.2.5 is the earliest entry.
 
+## 1.7.0 — 2026-11-03
+
+- New look: the start page, Settings, the connecting dialog and the What's new dialog are
+  redesigned with a shared light/dark theme, the Vindauga logo, uniform desktop and app
+  cards, and a dashed placeholder card for more resources.
+- Settings has a new Appearance option (System, Light, Dark) and is reorganised into
+  Updates, Display, Performance, Session, Sign-in and feed, and About.
+- Imported `.rdp` files show when they were imported and last used.
+- Fix the What's new dialog: header and footer now run edge to edge, the height follows
+  the content, and the footer has a link to the full release and an **Update** button.
+- Fix unreadable text in Settings input fields when the app theme differs from the system.
+- New `--screenshot <file>` option (with `--page` and `--size`) saves an image of the
+  window and exits, for checking the UI without a session; see the README.
+
 ## 1.6.0 — 2026-11-02
 
 - Update check: Vindauga looks for a newer release on GitHub at most once a day and shows a
