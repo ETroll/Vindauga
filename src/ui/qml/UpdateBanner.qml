@@ -175,16 +175,24 @@ Rectangle {
         }
     }
 
-    // Release notes in a modal rather than inline: they can be long.
+    // Release notes in a modal rather than inline: they can be long. Header and footer are
+    // built here (not the style's defaults) so the bars run edge to edge like the design.
     Dialog {
         id: notesDialog
         modal: true
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(640, parent.width - 48)
-        height: Math.min(520, parent.height - 48)
-        title: qsTr("What's new in Vindauga %1").arg(updater.availableVersion)
-        standardButtons: Dialog.Close
+        height: Math.min(implicitHeight, parent.height - 48)
+        padding: 0
+        topPadding: 0
+        bottomPadding: 0
+        leftPadding: 0
+        rightPadding: 0
+        topInset: 0
+        bottomInset: 0
+        leftInset: 0
+        rightInset: 0
 
         background: Rectangle {
             radius: Theme.radiusDialog
@@ -193,17 +201,123 @@ Rectangle {
         }
         Overlay.modal: Rectangle { color: Theme.scrim }
 
-        ScrollView {
-            anchors.fill: parent
+        header: Item {
+            implicitHeight: headerColumn.implicitHeight + 36
+            ColumnLayout {
+                id: headerColumn
+                anchors.fill: parent
+                anchors.margins: 24
+                anchors.topMargin: 20
+                anchors.bottomMargin: 16
+                spacing: 4
+                Text {
+                    text: qsTr("What's new")
+                    color: Theme.text
+                    font.family: Theme.sans
+                    font.pixelSize: 18
+                    font.weight: Font.DemiBold
+                }
+                RowLayout {
+                    spacing: 8
+                    Rectangle {
+                        implicitWidth: versionText.implicitWidth + 16
+                        implicitHeight: 22
+                        radius: 6
+                        color: Theme.border
+                        Text {
+                            id: versionText
+                            anchors.centerIn: parent
+                            text: updater.availableVersion
+                            color: Theme.text
+                            font.family: Theme.mono
+                            font.pixelSize: 12
+                        }
+                    }
+                    Text {
+                        text: qsTr("you have %1").arg(app.version)
+                        color: Theme.muted
+                        font.family: Theme.sans
+                        font.pixelSize: 12
+                    }
+                }
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: Theme.border
+            }
+        }
+
+        contentItem: ScrollView {
+            id: notesScroll
+            implicitHeight: notesLabel.implicitHeight + 40
             clip: true
+            contentWidth: availableWidth
             Label {
-                width: notesDialog.availableWidth - 16
+                id: notesLabel
+                x: 24
+                y: 20
+                width: notesScroll.availableWidth - 48
                 wrapMode: Text.WordWrap
                 textFormat: Text.MarkdownText
                 color: Theme.text
+                linkColor: Theme.link
                 font.family: Theme.sans
+                font.pixelSize: 13
                 text: updater.releaseNotes
                 onLinkActivated: (link) => Qt.openUrlExternally(link)
+            }
+        }
+
+        footer: Rectangle {
+            implicitHeight: 64
+            color: Theme.bar
+            // Rounded bottom corners come from clipping to the dialog's own radius.
+            radius: Theme.radiusDialog
+            Rectangle {
+                width: parent.width
+                height: parent.radius
+                color: parent.color
+            }
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.border
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
+                spacing: 8
+                Text {
+                    text: qsTr("Full release on GitHub")
+                    color: linkArea.containsMouse ? Theme.text : Theme.link
+                    font.family: Theme.sans
+                    font.pixelSize: 13
+                    MouseArea {
+                        id: linkArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: updater.openReleasePage()
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                DButton {
+                    text: qsTr("Close")
+                    onClicked: notesDialog.close()
+                }
+                DButton {
+                    visible: updater.state === UpdateController.Available && updater.canInstall
+                    kind: "primary"
+                    enabled: !app.authBusy
+                    text: qsTr("Update to %1").arg(updater.availableVersion)
+                    onClicked: {
+                        notesDialog.close()
+                        updater.install()
+                    }
+                }
             }
         }
     }

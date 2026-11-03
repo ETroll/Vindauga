@@ -42,6 +42,12 @@ ApplicationWindow {
     // The sign-in web view is overlaid on this window rather than opened separately.
     Component.onCompleted: app.setHostWindow(root)
 
+    // Used by `vindauga --screenshot ... --page <name>` (see main.cpp).
+    function openPage(name) {
+        if (name === "settings")
+            stack.push(settingsPageComponent)
+    }
+
     StackView {
         id: stack
         anchors.fill: parent

@@ -2,6 +2,9 @@
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QMetaObject>
+#include <QQuickWindow>
+#include <QTimer>
 #include <QQmlApplicationEngine>
 #include <cstdio>
 
@@ -43,9 +46,44 @@ int main(int argc, char* argv[]) {
         QStringLiteral("log-level"),
         QStringLiteral("Minimum log level: debug, info, warning or error (default: info)."),
         QStringLiteral("level"), QStringLiteral("info"));
+    // Developer aid for checking the UI without a real session, e.g.
+    //   QT_QPA_PLATFORM=offscreen vindauga --screenshot home.png --page settings --size 900x1800
+    const QCommandLineOption screenshotOption(
+        QStringLiteral("screenshot"),
+        QStringLiteral("Save a screenshot of the window to <file> and exit."),
+        QStringLiteral("file"));
+    const QCommandLineOption pageOption(
+        QStringLiteral("page"),
+        QStringLiteral("Page to show before the screenshot: home or settings (default: home)."),
+        QStringLiteral("page"), QStringLiteral("home"));
+    const QCommandLineOption sizeOption(
+        QStringLiteral("size"),
+        QStringLiteral("Window size for the screenshot, e.g. 900x1800."),
+        QStringLiteral("WxH"));
+    parser.addOption(screenshotOption);
+    parser.addOption(pageOption);
+    parser.addOption(sizeOption);
     parser.addOption(logTerminalOption);
     parser.addOption(logLevelOption);
     parser.process(app);
+
+    QSize screenshotSize;
+    if (parser.isSet(sizeOption)) {
+        const QStringList parts = parser.value(sizeOption).split(QLatin1Char('x'));
+        const int w = parts.value(0).toInt();
+        const int h = parts.value(1).toInt();
+        if (parts.size() != 2 || w <= 0 || h <= 0) {
+            std::fprintf(stderr, "Invalid --size %s (expected WxH, e.g. 900x1800)\n",
+                         qPrintable(parser.value(sizeOption)));
+            return 1;
+        }
+        screenshotSize = QSize(w, h);
+    }
+    const QString pageName = parser.value(pageOption);
+    if (pageName != QLatin1String("home") && pageName != QLatin1String("settings")) {
+        std::fprintf(stderr, "Unknown --page %s (valid: home, settings)\n", qPrintable(pageName));
+        return 1;
+    }
 
     vindauga::LogLevel level = vindauga::LogLevel::Info;
     if (!vindauga::logLevelFromString(parser.value(logLevelOption), level)) {
@@ -82,6 +120,28 @@ int main(int argc, char* argv[]) {
     engine.loadFromModule("Vindauga", "Main");
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    if (parser.isSet(screenshotOption)) {
+        // Give the cached feed and the first layout time to settle, switch page, resize,
+        // let the layout settle again, then grab.
+        const QString file = parser.value(screenshotOption);
+        QTimer::singleShot(2500, &app, [&engine, pageName, screenshotSize, file]() {
+            auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
+            if (!window) {
+                QCoreApplication::exit(1);
+                return;
+            }
+            QMetaObject::invokeMethod(window, "openPage", Q_ARG(QVariant, pageName));
+            if (screenshotSize.isValid())
+                window->resize(screenshotSize);
+            QTimer::singleShot(1000, window, [window, file]() {
+                const bool ok = window->grabWindow().save(file);
+                if (!ok)
+                    std::fprintf(stderr, "Could not save screenshot to %s\n", qPrintable(file));
+                QCoreApplication::exit(ok ? 0 : 1);
+            });
+        });
+    }
 
     return app.exec();
 }
