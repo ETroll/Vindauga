@@ -21,6 +21,7 @@ constexpr auto kUseDisplayScaleFactorKey = "useDisplayScaleFactor";
 constexpr auto kHardwareVideoDecodingKey = "hardwareVideoDecoding";
 constexpr auto kPreferredVaapiDeviceKey = "preferredVaapiDevice";
 constexpr auto kFrameBufferMsKey = "frameBufferMs";
+constexpr auto kAppearanceKey = "appearance";
 constexpr auto kPreventSessionLockSecondsKey = "preventSessionLockSeconds";
 constexpr auto kFeedDiscoveryUrlKey = "feedDiscoveryUrl";
 constexpr auto kSignInUserAgentKey = "signInUserAgent";
@@ -91,6 +92,20 @@ void AppSettings::setFrameBufferMs(int value) {
     QSettings settings(m_path, QSettings::IniFormat);
     settings.setValue(kFrameBufferMsKey, value);
     emit frameBufferMsChanged();
+}
+
+int AppSettings::appearance() const {
+    QSettings settings(m_path, QSettings::IniFormat);
+    return std::clamp(settings.value(kAppearanceKey, 0).toInt(), 0, 2);
+}
+
+void AppSettings::setAppearance(int value) {
+    value = std::clamp(value, 0, 2);
+    if (value == appearance())
+        return;
+    QSettings settings(m_path, QSettings::IniFormat);
+    settings.setValue(kAppearanceKey, value);
+    emit appearanceChanged();
 }
 
 int AppSettings::preventSessionLockSeconds() const {

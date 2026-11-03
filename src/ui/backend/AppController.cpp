@@ -50,6 +50,8 @@ AppController::AppController(QObject* parent)
             &AppController::useDisplayScaleFactorChanged);
     connect(m_settings.get(), &AppSettings::frameBufferMsChanged, this,
             &AppController::frameBufferMsChanged);
+    connect(m_settings.get(), &AppSettings::appearanceChanged, this,
+            &AppController::appearanceChanged);
     connect(m_settings.get(), &AppSettings::preventSessionLockSecondsChanged, this,
             &AppController::preventSessionLockSecondsChanged);
     connect(m_settings.get(), &AppSettings::feedDiscoveryUrlChanged, this,
@@ -157,6 +159,14 @@ int AppController::frameBufferMs() const {
 
 void AppController::setFrameBufferMs(int value) {
     m_settings->setFrameBufferMs(value);
+}
+
+int AppController::appearance() const {
+    return m_settings->appearance();
+}
+
+void AppController::setAppearance(int value) {
+    m_settings->setAppearance(value);
 }
 
 int AppController::preventSessionLockSeconds() const {

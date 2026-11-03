@@ -26,6 +26,8 @@ QVariant ConnectionListModel::data(const QModelIndex& index, int role) const {
         return conn.displayName;
     case LastUsedAtRole:
         return conn.lastUsedAt;
+    case AddedAtRole:
+        return conn.addedAt;
     default:
         return {};
     }
@@ -36,6 +38,7 @@ QHash<int, QByteArray> ConnectionListModel::roleNames() const {
         { IdRole, "id" },
         { DisplayNameRole, "displayName" },
         { LastUsedAtRole, "lastUsedAt" },
+        { AddedAtRole, "addedAt" },
     };
 }
 

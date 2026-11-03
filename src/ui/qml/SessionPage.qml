@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.FluentWinUI3
+import QtQuick.Layouts
 import Vindauga
 
 // Full-surface RdpItem with an auto-hidden "notch" toolbar revealed by moving the
@@ -147,25 +148,73 @@ Page {
         }
     }
 
-    // Spinner + status text while waiting for the connection. Covers both the short
-    // AAD/RDSTLS negotiation and the long wait while Azure boots a deallocated session
-    // host (up to several minutes). Hidden once the session connects or the error card
-    // below takes over.
-    Column {
-        anchors.centerIn: parent
-        visible: !page.sessionActive && page.errorText.length === 0
-        spacing: 16
+    // Scrim + dialog while waiting for the connection (and while FreeRDP retries). Covers
+    // both the short AAD/RDSTLS negotiation and the long wait while Azure boots a
+    // deallocated session host (up to several minutes). Hidden once the session connects
+    // or the error card below takes over.
+    // TODO: the design also lists per-step progress (signed in / resolved gateway / opening
+    // session / waiting for desktop); the backend does not report steps yet.
+    Rectangle {
+        anchors.fill: parent
+        visible: !page.sessionActive
+        color: Theme.scrim
 
-        BusyIndicator {
-            anchors.horizontalCenter: parent.horizontalCenter
-            running: visible
-        }
-        Label {
-            width: Math.min(360, page.width - 48)
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-            color: "white"
-            text: page.reconnectingText.length > 0 ? page.reconnectingText : qsTr("Connecting…")
+        Rectangle {
+            id: connectCard
+            visible: page.errorText.length === 0
+            anchors.centerIn: parent
+            width: Math.min(460, parent.width - 48)
+            height: connectColumn.implicitHeight + 44
+            radius: Theme.radiusDialog
+            color: Theme.surface
+            border.color: Theme.border
+
+            ColumnLayout {
+                id: connectColumn
+                anchors.fill: parent
+                anchors.margins: 24
+                anchors.topMargin: 20
+                spacing: 16
+
+                RowLayout {
+                    spacing: 14
+                    Rectangle {
+                        Layout.preferredWidth: 44
+                        Layout.preferredHeight: 44
+                        radius: 11
+                        color: Theme.accentTint
+                        BusyIndicator {
+                            anchors.centerIn: parent
+                            width: 28
+                            height: 28
+                            running: connectCard.visible
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.text
+                        font.family: Theme.sans
+                        font.pixelSize: 17
+                        font.weight: Font.DemiBold
+                        text: qsTr("Connecting…")
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.muted
+                    font.family: Theme.sans
+                    font.pixelSize: 13
+                    text: page.reconnectingText.length > 0 ? page.reconnectingText
+                                                           : qsTr("Opening the RDP session")
+                }
+                DButton {
+                    Layout.alignment: Qt.AlignRight
+                    text: qsTr("Cancel")
+                    onClicked: page.backRequested()
+                }
+            }
         }
     }
 
@@ -174,41 +223,46 @@ Page {
     Rectangle {
         anchors.centerIn: parent
         visible: page.errorText.length > 0
-        width: Math.min(420, parent.width - 48)
-        height: errorColumn.implicitHeight + 32
-        radius: 12
-        color: "#e6202024"
-        border.color: "#33ffffff"
-        border.width: 1
+        width: Math.min(460, parent.width - 48)
+        height: errorColumn.implicitHeight + 48
+        radius: Theme.radiusDialog
+        color: Theme.surface
+        border.color: Theme.border
 
-        Column {
+        ColumnLayout {
             id: errorColumn
-            anchors.centerIn: parent
-            width: parent.width - 32
+            anchors.fill: parent
+            anchors.margins: 24
             spacing: 12
 
-            Label {
-                width: parent.width
+            Text {
+                Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                color: "white"
-                font.bold: true
+                color: Theme.text
+                font.family: Theme.sans
+                font.pixelSize: 17
+                font.weight: Font.DemiBold
                 text: qsTr("Connection failed")
             }
-            Label {
-                width: parent.width
+            Text {
+                Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                color: "#dddddd"
+                color: Theme.textSoft
+                font.family: Theme.sans
+                font.pixelSize: 13
                 text: page.friendlyError(page.errorText)
             }
-            Row {
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
                 spacing: 8
-                Button {
-                    text: qsTr("Try again")
-                    onClicked: page.startConnecting()
-                }
-                Button {
+                DButton {
                     text: qsTr("Back to connections")
                     onClicked: page.backRequested()
+                }
+                DButton {
+                    kind: "primary"
+                    text: qsTr("Try again")
+                    onClicked: page.startConnecting()
                 }
             }
         }
