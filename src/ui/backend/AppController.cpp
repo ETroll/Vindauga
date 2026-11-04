@@ -82,7 +82,14 @@ AppController::AppController(QObject* parent)
 
     // The cached list is on screen immediately; the feed is refreshed behind it.
     publishCache();
-    startupSignIn();
+    // Documentation screenshots: pretend to be signed in as this account and skip the real
+    // sign-in (no keychain, no network). Used with a scratch XDG_CONFIG_HOME/XDG_CACHE_HOME,
+    // see "Checking the UI without a session" in the README.
+    const QString demoAccount = qEnvironmentVariable("VINDAUGA_DEMO_ACCOUNT");
+    if (!demoAccount.isEmpty())
+        setAccount(true, demoAccount);
+    else
+        startupSignIn();
 }
 
 AppController::~AppController() {

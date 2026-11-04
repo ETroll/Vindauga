@@ -16,6 +16,10 @@
   <a href="#building-from-source">Building from source</a>
 </p>
 
+<p align="center">
+  <img src="docs/images/home.png" alt="Vindauga home page listing the desktops assigned to the signed-in user" width="760">
+</p>
+
 ---
 
 *Vindauga* is the Old Norse word for window ("wind-eye"). The project is a C++20 / Qt 6 Quick application built on [FreeRDP 3](https://www.freerdp.com/), made for people who use Azure Virtual Desktop (AVD) or a Windows 365 Cloud PC from a Linux desktop and want something that simply works: no terminal, no hand-edited command lines, no browser tab pretending to be a desktop.
@@ -116,6 +120,13 @@ The packaging scripts under `packaging/` (`build-deb.sh`, `PKGBUILD`) are what t
 
 ```bash
 QT_QPA_PLATFORM=offscreen build/src/app/vindauga --screenshot settings.png --page settings --size 900x1800
+```
+
+For documentation screenshots there is no need to sign in: set `VINDAUGA_DEMO_ACCOUNT` to any name and the app skips the real sign-in and shows that account. Combined with a scratch `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` holding a made-up `feed.json` and `connections.json`, your own settings, keyring and desktops are never touched:
+
+```bash
+XDG_CONFIG_HOME=/tmp/demo/config XDG_CACHE_HOME=/tmp/demo/cache VINDAUGA_DEMO_ACCOUNT=alex.demo@contoso.com \
+  QT_QPA_PLATFORM=offscreen build/src/app/vindauga --screenshot home.png --page home --size 1132x720
 ```
 
 The theme follows the Appearance setting in `settings.ini`; point `XDG_CONFIG_HOME` at a scratch directory to try the other scheme without touching your own settings.
